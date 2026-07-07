@@ -578,6 +578,7 @@ function loadState(){
   }
 }
 let state = loadState();
+window.state = state; // exposed for console debugging; kept in sync on every reassignment below
 function saveState(){
   try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
   catch(e){ console.error(e); toast('Could not save data — storage may be full or unavailable.', 'error'); }
@@ -599,8 +600,8 @@ function fmtNative(amount, currency){
   const n = Number(amount)||0;
   const neg = n < -0.004;
   const numStr = fmtNum(Math.abs(n));
-  const signed = (neg?'-':'')+numStr;
-  return c.isSuffix ? signed + c.suffix : c.symbol + signed;
+  const sign = neg ? '-' : '';
+  return c.isSuffix ? (sign + numStr + c.suffix) : (sign + c.symbol + numStr);
 }
 function fmtNPR(amount){ return fmtNative(amount, 'NPR'); }
 function fmtDate(iso){
@@ -848,8 +849,8 @@ function calcTrialBalance(){
   const c = calcCore();
   const pl = calcProfitLoss();
   const dr = [], cr = [];
-  state.accounts.filter(function(a){ return !a.archived; }).forEach(function(a){
-    dr.push({ label:a.name+' ('+a.currency+')', amount: accountBalanceNPR(a.id) });
+  state.accounts.filter(function(a){ return !a.archived || Math.abs(accountBalanceNPR(a.id))>0.004; }).forEach(function(a){
+    dr.push({ label:a.name+' ('+a.currency+')'+(a.archived?' (archived)':''), amount: accountBalanceNPR(a.id) });
   });
   if(c.AR>0.004) dr.push({label:'Accounts Receivable', amount:c.AR});
   if(c.drawings>0.004) dr.push({label:'Drawings', amount:c.drawings});
@@ -1988,8 +1989,8 @@ function exportPLCSV(){
 }
 function balanceSheetHtml(){
   const bs=calcBalanceSheet();
-  const assetRows = bs.accounts.filter(function(a){ return !a.archived; }).map(function(a){
-    return '<div class="ledger-row"><span class="name">'+escapeHtml(a.name)+' ('+a.currency+')</span><span class="amt">'+fmtNPR(a.balanceNPR)+'</span></div>';
+  const assetRows = bs.accounts.filter(function(a){ return !a.archived || Math.abs(a.balanceNPR)>0.004; }).map(function(a){
+    return '<div class="ledger-row"><span class="name">'+escapeHtml(a.name)+' ('+a.currency+')'+(a.archived?' <span class="text-dim">(archived)</span>':'')+'</span><span class="amt">'+fmtNPR(a.balanceNPR)+'</span></div>';
   }).join('');
   return '<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportBalanceSheetCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="window.print()">Print</button></div>'+
     balanceCheckHtml(bs.balanced, bs.balanced?'Balanced — assets equal liabilities plus equity':'Not balanced — please review your entries')+
@@ -2012,7 +2013,7 @@ function balanceSheetHtml(){
 function exportBalanceSheetCSV(){
   const bs=calcBalanceSheet();
   const rows=[['Section','Item','Amount (NPR)']];
-  bs.accounts.filter(function(a){ return !a.archived; }).forEach(function(a){ rows.push(['Assets',a.name+' ('+a.currency+')',a.balanceNPR.toFixed(2)]); });
+  bs.accounts.filter(function(a){ return !a.archived || Math.abs(a.balanceNPR)>0.004; }).forEach(function(a){ rows.push(['Assets',a.name+' ('+a.currency+')'+(a.archived?' (archived)':''),a.balanceNPR.toFixed(2)]); });
   rows.push(['Assets','Accounts Receivable',bs.AR.toFixed(2)]);
   rows.push(['Assets','TOTAL ASSETS',bs.totalAssets.toFixed(2)]);
   rows.push(['Liabilities','Accounts Payable',bs.AP.toFixed(2)]);
@@ -2074,6 +2075,7 @@ function resetAllData(){
   if(confirm('This will permanently erase ALL data in this app. This cannot be undone. Continue?')){
     if(confirm('Are you absolutely sure? Consider exporting a backup first.')){
       state = defaultState();
+      window.state = state;
       saveState();
       toast('All data erased','success');
       applyTheme();
@@ -2120,6 +2122,7 @@ function handleImportFile(evt){
       };
       if(merged.meta.theme!=='light') merged.meta.theme='dark';
       state = merged;
+      window.state = state;
       saveState();
       toast('Data imported successfully','success');
       applyTheme();
