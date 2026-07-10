@@ -449,7 +449,7 @@ tfoot td{padding:12px 14px; font-weight:700; background:var(--surface-2); border
     <div class="sidebar-brand">
       <div class="brand-mark">रू</div>
       <div class="brand-text">
-        <div class="brand-name" id="brandNameDisplay">QwikGold</div>
+        <div class="brand-name" id="brandNameDisplay">Khata</div>
         <div class="brand-sub">Accounting Ledger</div>
       </div>
     </div>
@@ -1833,6 +1833,7 @@ function transferListHtml(){
 function renderSalesReport(){
   const el=document.getElementById('page-sales-report');
   el.innerHTML =
+    printHeaderHtml('Sales Report')+
     '<div class="filter-bar">'+
       '<div class="field"><label>From</label><input type="date" id="srFrom"></div>'+
       '<div class="field"><label>To</label><input type="date" id="srTo"></div>'+
@@ -1841,6 +1842,8 @@ function renderSalesReport(){
       '<button class="btn btn-ghost" onclick="document.getElementById(\'srFrom\').value=\'\';document.getElementById(\'srTo\').value=\'\';document.getElementById(\'srStatus\').value=\'\';renderSalesReportBody()">Clear</button>'+
       '<div style="flex:1"></div>'+
       '<button class="btn" onclick="exportSalesCSV()">'+icon('download')+' Export CSV</button>'+
+      '<button class="btn" onclick="downloadReportPDF(\'sales\')">'+icon('download')+' Download PDF</button>'+
+      '<button class="btn" onclick="window.print()">Print</button>'+
     '</div><div id="salesReportBody"></div>';
   renderSalesReportBody();
 }
@@ -1884,6 +1887,7 @@ function exportSalesCSV(){
 function renderPurchaseReport(){
   const el=document.getElementById('page-purchase-report');
   el.innerHTML =
+    printHeaderHtml('Purchase Report')+
     '<div class="filter-bar">'+
       '<div class="field"><label>From</label><input type="date" id="prFrom"></div>'+
       '<div class="field"><label>To</label><input type="date" id="prTo"></div>'+
@@ -1892,6 +1896,8 @@ function renderPurchaseReport(){
       '<button class="btn btn-ghost" onclick="document.getElementById(\'prFrom\').value=\'\';document.getElementById(\'prTo\').value=\'\';document.getElementById(\'prStatus\').value=\'\';renderPurchaseReportBody()">Clear</button>'+
       '<div style="flex:1"></div>'+
       '<button class="btn" onclick="exportPurchaseCSV()">'+icon('download')+' Export CSV</button>'+
+      '<button class="btn" onclick="downloadReportPDF(\'purchase\')">'+icon('download')+' Download PDF</button>'+
+      '<button class="btn" onclick="window.print()">Print</button>'+
     '</div><div id="purchaseReportBody"></div>';
   renderPurchaseReportBody();
 }
@@ -1935,6 +1941,7 @@ function exportPurchaseCSV(){
 function renderMoneyFlowReport(){
   const el=document.getElementById('page-moneyflow-report');
   el.innerHTML=
+    printHeaderHtml('Money Flow Report')+
     '<div class="filter-bar">'+
       '<div class="field"><label>From</label><input type="date" id="mfFrom"></div>'+
       '<div class="field"><label>To</label><input type="date" id="mfTo"></div>'+
@@ -1943,6 +1950,8 @@ function renderMoneyFlowReport(){
       '<button class="btn btn-ghost" onclick="document.getElementById(\'mfFrom\').value=\'\';document.getElementById(\'mfTo\').value=\'\';document.getElementById(\'mfAccount\').value=\'\';renderMoneyFlowBody()">Clear</button>'+
       '<div style="flex:1"></div>'+
       '<button class="btn" onclick="exportMoneyFlowCSV()">'+icon('download')+' Export CSV</button>'+
+      '<button class="btn" onclick="downloadReportPDF(\'moneyflow\')">'+icon('download')+' Download PDF</button>'+
+      '<button class="btn" onclick="window.print()">Print</button>'+
     '</div><div id="moneyFlowBody"></div>';
   renderMoneyFlowBody();
 }
@@ -1991,11 +2000,12 @@ function renderDueReport(){
   const totalRec=receivables.reduce(function(s,r){ return s+r.remaining; },0);
   const totalPay=payables.reduce(function(s,r){ return s+r.remaining; },0);
   el.innerHTML =
+    printHeaderHtml('Due Report')+
     '<div class="summary-strip">'+
       '<div class="summary-chip"><div class="l">Total Receivable</div><div class="v text-green">'+fmtNPR(totalRec)+'</div></div>'+
       '<div class="summary-chip"><div class="l">Total Payable</div><div class="v text-red">'+fmtNPR(totalPay)+'</div></div>'+
       '<div class="summary-chip"><div class="l">Net Due Position</div><div class="v '+(totalRec-totalPay>=0?'text-green':'text-red')+'">'+fmtNPR(totalRec-totalPay)+'</div></div>'+
-      '<div style="align-self:center"><button class="btn" onclick="exportDueCSV()">'+icon('download')+' Export CSV</button></div>'+
+      '<div style="align-self:center" class="btn-group"><button class="btn" onclick="exportDueCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="downloadReportPDF(\'due\')">'+icon('download')+' Download PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
     '</div>'+
     '<div class="ledger-section-title">Receivables — money owed to you</div>'+dueTableHtml(receivables,'green')+
     '<div class="ledger-section-title">Payables — money you owe</div>'+dueTableHtml(payables,'red');
@@ -2098,8 +2108,8 @@ function trialBalanceHtml(){
     bodyRows+='<tr><td>'+(d?escapeHtml(d.label):'')+'</td><td class="num">'+(d?fmtNPR(d.amount):'')+'</td>'+
       '<td>'+(c?escapeHtml(c.label):'')+'</td><td class="num">'+(c?fmtNPR(c.amount):'')+'</td></tr>';
   }
-  return balanceCheckHtml(tb.balanced, tb.balanced?'Balanced — total debits equal total credits':'Not balanced — please review your entries')+
-    '<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportTrialBalanceCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="window.print()">Print</button></div>'+
+  return printHeaderHtml('Trial Balance')+balanceCheckHtml(tb.balanced, tb.balanced?'Balanced — total debits equal total credits':'Not balanced — please review your entries')+
+    '<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportTrialBalanceCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="downloadReportPDF(\'trial\')">'+icon('download')+' Download PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
     '<div class="table-wrap"><table><thead><tr><th>Debit</th><th class="num">Amount</th><th>Credit</th><th class="num">Amount</th></tr></thead>'+
     '<tbody>'+(bodyRows||'<tr class="empty-row"><td colspan="4">No data yet.</td></tr>')+'</tbody>'+
     '<tfoot><tr><td>Total</td><td class="num">'+fmtNPR(tb.totalDr)+'</td><td>Total</td><td class="num">'+fmtNPR(tb.totalCr)+'</td></tr></tfoot></table></div>';
@@ -2116,7 +2126,7 @@ function plHtml(){
   const pl=calcProfitLoss();
   const incRows=Object.keys(pl.incomeByCategory).map(function(k){ return '<div class="ledger-row"><span class="name">'+escapeHtml(k)+'</span><span class="amt">'+fmtNPR(pl.incomeByCategory[k])+'</span></div>'; }).join('');
   const expRows=Object.keys(pl.expenseByCategory).map(function(k){ return '<div class="ledger-row"><span class="name">'+escapeHtml(k)+'</span><span class="amt">'+fmtNPR(pl.expenseByCategory[k])+'</span></div>'; }).join('');
-  return '<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportPLCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="window.print()">Print</button></div>'+
+  return printHeaderHtml('Profit &amp; Loss Statement')+'<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportPLCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="downloadReportPDF(\'pl\')">'+icon('download')+' Download PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
     '<div class="card">'+
       '<div class="ledger-section-title">Revenue</div>'+
       '<div class="ledger-row"><span class="name">Sales Revenue</span><span class="amt">'+fmtNPR(pl.salesRevenue)+'</span></div>'+
@@ -2146,7 +2156,7 @@ function balanceSheetHtml(){
   const assetRows = bs.accounts.filter(function(a){ return !a.archived || Math.abs(a.balanceNPR)>0.004; }).map(function(a){
     return '<div class="ledger-row"><span class="name">'+escapeHtml(a.name)+' ('+a.currency+')'+(a.archived?' <span class="text-dim">(archived)</span>':'')+'</span><span class="amt">'+fmtNPR(a.balanceNPR)+'</span></div>';
   }).join('');
-  return '<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportBalanceSheetCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="window.print()">Print</button></div>'+
+  return printHeaderHtml('Balance Sheet')+'<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportBalanceSheetCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="downloadReportPDF(\'bs\')">'+icon('download')+' Download PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
     balanceCheckHtml(bs.balanced, bs.balanced?'Balanced — assets equal liabilities plus equity':'Not balanced — please review your entries')+
     '<div class="grid-2">'+
       '<div class="card"><div class="ledger-section-title">Assets</div>'+assetRows+
@@ -2279,6 +2289,14 @@ function removeLogo(){
   saveState();
   toast('Logo removed','success');
   renderSettings();
+}
+function printHeaderHtml(reportTitle){
+  const name = escapeHtml(state.meta.businessName || 'My Business');
+  const logo = state.meta.logoDataUrl ? '<img class="print-logo" src="'+state.meta.logoDataUrl+'" alt="Logo">' : '';
+  return '<div class="print-header">'+logo+
+    '<div><div class="print-company">'+name+'</div>'+
+    '<div class="print-report-title">'+escapeHtml(reportTitle)+'</div>'+
+    '<div class="print-date">Generated '+fmtDate(todayISO())+'</div></div></div>';
 }
 function openBaseCurrencyModal(){
   const current = baseCurrency();
