@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Khata — Accounting Ledger</title>
+<title>QwikGold — Accounting Ledger</title>
 <style>
 /* ============================================================
    DESIGN TOKENS
@@ -181,12 +181,9 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .icon-btn svg{width:16px; height:16px;}
 
 .content{
-  flex:1;
-  padding:24px;
-  max-width:1400px;
-  width:100%;
-  margin:0 auto;
-  background: var(--bg);
+  flex:1; padding:24px; max-width:1400px; width:100%; margin:0 auto;
+  background-image:repeating-linear-gradient(var(--bg) 0 27px, var(--border-soft) 27px 28px);
+  background-attachment:local;
 }
 [data-theme="light"] .content{background-image:none;}
 .page{display:none; animation:fadein .18s ease;}
@@ -428,12 +425,19 @@ tfoot td{padding:12px 14px; font-weight:700; background:var(--surface-2); border
   .stat-grid,.stat-grid-sm{grid-template-columns:1fr;}
 }
 
+.print-header{display:none;}
 @media print{
   .sidebar,.topbar,.form-actions,.btn,.filter-bar,.acct-actions{display:none !important;}
   .main{margin-left:0;}
   .content{max-width:100%; padding:0; background-image:none;}
   body{background:#fff; color:#000;}
   .card{border:1px solid #ccc;}
+  .print-header{display:flex !important; align-items:center; gap:14px; padding-bottom:14px; margin-bottom:18px; border-bottom:2px solid #000;}
+  .print-logo{height:56px; max-width:160px; object-fit:contain;}
+  .print-company{font-size:18px; font-weight:800; color:#000;}
+  .print-report-title{font-size:13px; color:#333; margin-top:2px;}
+  .print-date{font-size:11px; color:#666; margin-top:1px;}
+  .balance-check{border:1px solid #ccc; color:#000 !important; background:#fff !important;}
 }
 </style>
 </head>
@@ -445,7 +449,7 @@ tfoot td{padding:12px 14px; font-weight:700; background:var(--surface-2); border
     <div class="sidebar-brand">
       <div class="brand-mark">रू</div>
       <div class="brand-text">
-        <div class="brand-name" id="brandNameDisplay">Khata</div>
+        <div class="brand-name" id="brandNameDisplay">QwikGold</div>
         <div class="brand-sub">Accounting Ledger</div>
       </div>
     </div>
@@ -508,13 +512,22 @@ tfoot td{padding:12px 14px; font-weight:700; background:var(--surface-2); border
    ============================================================ */
 const STORAGE_KEY = 'khata_accountant_state_v1';
 
+const STANDARD_CURRENCIES = ['NPR','INR','USD','USDT','BDT'];
 const CURRENCIES = {
-  NPR:  { symbol:'Rs. ', suffix:'', isSuffix:false, name:'Nepalese Rupee (base)' },
+  NPR:  { symbol:'Rs. ', suffix:'', isSuffix:false, name:'Nepalese Rupee' },
   INR:  { symbol:'₹',    suffix:'', isSuffix:false, name:'Indian Rupee' },
   USD:  { symbol:'$',    suffix:'', isSuffix:false, name:'US Dollar' },
   USDT: { symbol:'',     suffix:' USDT', isSuffix:true, name:'Tether' },
+  BDT:  { symbol:'৳',    suffix:'', isSuffix:false, name:'Bangladeshi Taka' },
 };
-const RATE_PLACEHOLDER = { INR:'1.60', USD:'135.00', USDT:'135.00' };
+// Any currency code the user types that isn't one of the standard five (e.g. "UC" for a reseller
+// credit balance) is treated as a custom unit and displayed as "amount CODE" automatically.
+function currencyInfo(code){
+  return CURRENCIES[code] || { symbol:'', suffix:' '+code, isSuffix:true, name:code };
+}
+const RATE_PLACEHOLDER = { INR:'1.60', USD:'135.00', USDT:'135.00', BDT:'1.20' };
+function baseCurrency(){ return (state.meta && state.meta.baseCurrency) || 'NPR'; }
+function isBaseCurrency(code){ return code === baseCurrency(); }
 const CASH_IN_PRESETS = ['Capital Investment','Other Income','Interest Income','Refund Received'];
 const CASH_OUT_PRESETS = ['Drawings (Capital Withdrawal)','Rent','Salary / Wages','Utilities','Office Supplies','Marketing','Transport / Fuel'];
 
@@ -550,10 +563,11 @@ function icon(name){ return '<svg viewBox="0 0 24 24" fill="none" stroke="curren
    ============================================================ */
 function defaultState(){
   return {
-    meta:{ businessName:'My Business', theme:'dark' },
+    meta:{ businessName:'My Business', theme:'dark', baseCurrency:'NPR', logoDataUrl:null },
     accounts:[], sales:[], purchases:[], credits:[],
     cashTx:[], transfers:[], settlements:[],
     customCategories:{ in:[], out:[] },
+    customCurrencies:[], customParties:{ customers:[], suppliers:[] },
   };
 }
 function loadState(){
@@ -572,8 +586,11 @@ function loadState(){
       transfers: Array.isArray(p.transfers)?p.transfers:[],
       settlements: Array.isArray(p.settlements)?p.settlements:[],
       customCategories: Object.assign({in:[],out:[]}, p.customCategories||{}),
+      customCurrencies: Array.isArray(p.customCurrencies)?p.customCurrencies:[],
+      customParties: Object.assign({customers:[],suppliers:[]}, p.customParties||{}),
     };
     if(merged.meta.theme!=='light') merged.meta.theme='dark';
+    if(!merged.meta.baseCurrency) merged.meta.baseCurrency='NPR';
     return merged;
   }catch(e){
     console.error('State load failed, starting fresh', e);
@@ -599,14 +616,14 @@ function fmtNum(n){
   return (neg?'-':'')+str;
 }
 function fmtNative(amount, currency){
-  const c = CURRENCIES[currency] || CURRENCIES.NPR;
+  const c = currencyInfo(currency);
   const n = Number(amount)||0;
   const neg = n < -0.004;
   const numStr = fmtNum(Math.abs(n));
   const sign = neg ? '-' : '';
   return c.isSuffix ? (sign + numStr + c.suffix) : (sign + c.symbol + numStr);
 }
-function fmtNPR(amount){ return fmtNative(amount, 'NPR'); }
+function fmtNPR(amount){ return fmtNative(amount, baseCurrency()); }
 function fmtDate(iso){
   if(!iso) return '—';
   const d = new Date(iso+'T00:00:00');
@@ -646,8 +663,14 @@ function accountBalanceNative(accountId){
   const acc = getAccount(accountId);
   if(!acc) return 0;
   let bal = Number(acc.balance)||0;
-  state.sales.forEach(function(s){ if(s.accountId===accountId) bal += (Number(s.receivedNative)||0); });
-  state.purchases.forEach(function(p){ if(p.accountId===accountId) bal -= (Number(p.paidNative)||0); });
+  state.sales.forEach(function(s){
+    if(s.accountId===accountId) bal += (Number(s.receivedNative)||0);
+    if(s.payAccountId===accountId) bal -= (Number(s.payNative)||0);
+  });
+  state.purchases.forEach(function(p){
+    if(p.accountId===accountId) bal -= (Number(p.paidNative)||0);
+    if(p.receiveAccountId===accountId) bal += (Number(p.receiveNative)||0);
+  });
   state.credits.forEach(function(c){
     if(c.accountId===accountId){
       const nativeMoved = (Number(c.amount)||0) / (acc.rate||1);
@@ -720,19 +743,44 @@ function transferFeeNPR(t){
   const recvNPR = (Number(t.toAmount)||0)*toAcc.rate;
   return sentNPR - recvNPR;
 }
+function saleCogsNPR(s){
+  // Cost of fulfilling a sale by drawing down a stock/platform-credit account, e.g. Unipin UC.
+  if(!s.payAccountId) return 0;
+  const acc = getAccount(s.payAccountId);
+  if(!acc) return 0;
+  return (Number(s.payNative)||0) * acc.rate;
+}
+function purchaseIsAssetExchange(p){ return !!p.receiveAccountId; }
+function purchaseExchangeSpreadNPR(p){
+  // For a purchase that receives value into another account (e.g. buying USDT), this is an
+  // asset-for-asset exchange, not an expense. Positive = paid more than the received asset is
+  // worth (booked as a fee/loss); negative = received more (booked as a gain). Same idea as transferFeeNPR.
+  if(!p.receiveAccountId) return 0;
+  const receiveAcc = getAccount(p.receiveAccountId);
+  if(!receiveAcc) return 0;
+  const receiveNPR = (Number(p.receiveNative)||0) * receiveAcc.rate;
+  return (Number(p.amount)||0) - receiveNPR;
+}
 
 function calcCore(){
   const totalSales = state.sales.reduce(function(s,x){ return s+(Number(x.amount)||0); },0);
   const totalPurchases = state.purchases.reduce(function(s,x){ return s+(Number(x.amount)||0); },0);
+  // Purchases used to acquire another asset (e.g. buying USDT) are excluded from cost-of-goods,
+  // since the value isn't consumed - it's just held in a different account.
+  const purchaseCostForPL = state.purchases.reduce(function(s,x){ return purchaseIsAssetExchange(x) ? s : s+(Number(x.amount)||0); },0);
+  const purchaseAssetExchangeTotal = totalPurchases - purchaseCostForPL;
   const capitalIn = state.cashTx.filter(isCapitalIn).reduce(function(s,t){ return s+cashTxNPR(t); },0);
   const drawings = state.cashTx.filter(isDrawingsOut).reduce(function(s,t){ return s+cashTxNPR(t); },0);
   const otherIncomeTx = state.cashTx.filter(function(t){ return t.kind==='in' && !isCapitalIn(t); }).reduce(function(s,t){ return s+cashTxNPR(t); },0);
   const otherExpenseTx = state.cashTx.filter(function(t){ return t.kind==='out' && !isDrawingsOut(t); }).reduce(function(s,t){ return s+cashTxNPR(t); },0);
   let transferFee=0, transferGain=0;
   state.transfers.forEach(function(t){ const d=transferFeeNPR(t); if(d>0.004) transferFee+=d; else if(d<-0.004) transferGain+=-d; });
-  const otherIncome = otherIncomeTx + transferGain;
-  const otherExpenses = otherExpenseTx + transferFee;
-  const netProfit = totalSales + otherIncome - totalPurchases - otherExpenses;
+  let purchaseExchangeFee=0, purchaseExchangeGain=0;
+  state.purchases.forEach(function(p){ const d=purchaseExchangeSpreadNPR(p); if(d>0.004) purchaseExchangeFee+=d; else if(d<-0.004) purchaseExchangeGain+=-d; });
+  const saleCogs = state.sales.reduce(function(s,x){ return s+saleCogsNPR(x); },0);
+  const otherIncome = otherIncomeTx + transferGain + purchaseExchangeGain;
+  const otherExpenses = otherExpenseTx + transferFee + purchaseExchangeFee + saleCogs;
+  const netProfit = totalSales + otherIncome - purchaseCostForPL - otherExpenses;
   const openingBalances = state.accounts.reduce(function(s,a){ return s+(Number(a.balance)||0)*a.rate; },0)
     + state.credits.filter(function(c){ return !c.accountId; }).reduce(function(s,c){ return s+(c.type==='given'?(Number(c.amount)||0):-(Number(c.amount)||0)); },0);
   const AR = state.sales.reduce(function(s,x){ return s+Math.max(0,saleDue(x)); },0)
@@ -744,9 +792,10 @@ function calcCore(){
   const totalAssets = totalAccountsNPR + AR;
   const totalLiabPlusEquity = AP + totalEquity;
   return {
-    totalSales:totalSales, totalPurchases:totalPurchases, capitalIn:capitalIn, drawings:drawings,
+    totalSales:totalSales, totalPurchases:totalPurchases, purchaseCostForPL:purchaseCostForPL, purchaseAssetExchangeTotal:purchaseAssetExchangeTotal,
+    capitalIn:capitalIn, drawings:drawings, saleCogs:saleCogs,
     otherIncome:otherIncome, otherExpenses:otherExpenses, otherIncomeTx:otherIncomeTx, otherExpenseTx:otherExpenseTx,
-    transferFee:transferFee, transferGain:transferGain, netProfit:netProfit,
+    transferFee:transferFee, transferGain:transferGain, purchaseExchangeFee:purchaseExchangeFee, purchaseExchangeGain:purchaseExchangeGain, netProfit:netProfit,
     openingBalances:openingBalances, AR:AR, AP:AP, totalEquity:totalEquity, totalAccountsNPR:totalAccountsNPR,
     totalAssets:totalAssets, totalLiabPlusEquity:totalLiabPlusEquity,
     balanced: Math.abs(totalAssets-totalLiabPlusEquity) < 0.02,
@@ -819,7 +868,8 @@ function calcProfitLoss(fromDate, toDate){
   const cashTx = state.cashTx.filter(function(t){ return inRange(t.date); });
   const transfers = state.transfers.filter(function(t){ return inRange(t.date); });
   const salesRevenue = sales.reduce(function(s,x){ return s+(Number(x.amount)||0); },0);
-  const purchaseCost = purchases.reduce(function(s,x){ return s+(Number(x.amount)||0); },0);
+  const purchaseCost = purchases.reduce(function(s,x){ return purchaseIsAssetExchange(x) ? s : s+(Number(x.amount)||0); },0);
+  const assetExchangePurchases = purchases.reduce(function(s,x){ return purchaseIsAssetExchange(x) ? s+(Number(x.amount)||0) : s; },0);
   const incomeByCategory = {};
   cashTx.filter(function(t){ return t.kind==='in' && !isCapitalIn(t); }).forEach(function(t){
     incomeByCategory[t.category] = (incomeByCategory[t.category]||0) + cashTxNPR(t);
@@ -832,12 +882,19 @@ function calcProfitLoss(fromDate, toDate){
   transfers.forEach(function(t){ const d=transferFeeNPR(t); if(d>0.004) transferFee+=d; else if(d<-0.004) transferGain+=-d; });
   if(transferFee>0.004) expenseByCategory['Transfer Fees / Exchange Loss'] = (expenseByCategory['Transfer Fees / Exchange Loss']||0)+transferFee;
   if(transferGain>0.004) incomeByCategory['Exchange Gain'] = (incomeByCategory['Exchange Gain']||0)+transferGain;
+  let purchaseExchangeFee=0, purchaseExchangeGain=0;
+  purchases.forEach(function(p){ const d=purchaseExchangeSpreadNPR(p); if(d>0.004) purchaseExchangeFee+=d; else if(d<-0.004) purchaseExchangeGain+=-d; });
+  if(purchaseExchangeFee>0.004) expenseByCategory['Currency/Asset Exchange Loss'] = (expenseByCategory['Currency/Asset Exchange Loss']||0)+purchaseExchangeFee;
+  if(purchaseExchangeGain>0.004) incomeByCategory['Currency/Asset Exchange Gain'] = (incomeByCategory['Currency/Asset Exchange Gain']||0)+purchaseExchangeGain;
+  const saleCogs = sales.reduce(function(s,x){ return s+saleCogsNPR(x); },0);
+  if(saleCogs>0.004) expenseByCategory['Cost of Goods Sold (Sale Fulfillment)'] = (expenseByCategory['Cost of Goods Sold (Sale Fulfillment)']||0)+saleCogs;
   const totalOtherIncome = Object.keys(incomeByCategory).reduce(function(s,k){ return s+incomeByCategory[k]; },0);
   const totalOtherExpense = Object.keys(expenseByCategory).reduce(function(s,k){ return s+expenseByCategory[k]; },0);
   const totalRevenue = salesRevenue + totalOtherIncome;
   const totalExpense = purchaseCost + totalOtherExpense;
   const netProfit = totalRevenue - totalExpense;
-  return { salesRevenue:salesRevenue, purchaseCost:purchaseCost, incomeByCategory:incomeByCategory, expenseByCategory:expenseByCategory,
+  return { salesRevenue:salesRevenue, purchaseCost:purchaseCost, assetExchangePurchases:assetExchangePurchases, saleCogs:saleCogs,
+    incomeByCategory:incomeByCategory, expenseByCategory:expenseByCategory,
     totalOtherIncome:totalOtherIncome, totalOtherExpense:totalOtherExpense, totalRevenue:totalRevenue, totalExpense:totalExpense, netProfit:netProfit };
 }
 function calcBalanceSheet(){
@@ -857,7 +914,7 @@ function calcTrialBalance(){
   });
   if(c.AR>0.004) dr.push({label:'Accounts Receivable', amount:c.AR});
   if(c.drawings>0.004) dr.push({label:'Drawings', amount:c.drawings});
-  if(c.totalPurchases>0.004) dr.push({label:'Purchases', amount:c.totalPurchases});
+  if(c.purchaseCostForPL>0.004) dr.push({label:'Purchases', amount:c.purchaseCostForPL});
   Object.keys(pl.expenseByCategory).forEach(function(k){ if(pl.expenseByCategory[k]>0.004) dr.push({label:k, amount:pl.expenseByCategory[k]}); });
   if(c.AP>0.004) cr.push({label:'Accounts Payable', amount:c.AP});
   if(c.openingBalances>0.004) cr.push({label:'Opening Balances & Adjustments', amount:c.openingBalances});
@@ -890,14 +947,14 @@ function downloadCSV(rows, filename){
 function getAccountOr(id){ return getAccount(id); }
 function addAccount(d){
   const acc = { id:uid('acc'), type:d.type, name:d.name.trim(), number:(d.number||'').trim(),
-    currency:d.currency, rate: d.currency==='NPR'?1:(Number(d.rate)||0), balance:Number(d.balance)||0,
+    currency:d.currency, rate: d.currency===baseCurrency()?1:(Number(d.rate)||0), balance:Number(d.balance)||0,
     archived:false, createdAt:nowISOTime() };
   state.accounts.push(acc); saveState(); return acc;
 }
 function updateAccount(id,d){
   const acc = getAccount(id); if(!acc) return;
   acc.name=d.name.trim(); acc.number=(d.number||'').trim(); acc.currency=d.currency;
-  acc.rate = d.currency==='NPR'?1:(Number(d.rate)||0); acc.balance=Number(d.balance)||0;
+  acc.rate = d.currency===baseCurrency()?1:(Number(d.rate)||0); acc.balance=Number(d.balance)||0;
   saveState();
 }
 function accountHasHistory(id){
@@ -914,17 +971,32 @@ function removeOrArchiveAccount(id){
   saveState();
 }
 function unarchiveAccount(id){ const a=getAccount(id); if(a) a.archived=false; saveState(); }
+function rememberParty(kind, name){
+  if(!name) return;
+  const list = state.customParties[kind];
+  if(list.indexOf(name)===-1){ list.push(name); saveState(); }
+}
+function partyDatalistHtml(id, kind){
+  const names = (state.customParties[kind]||[]).slice().sort();
+  return '<datalist id="'+id+'">'+names.map(function(n){ return '<option value="'+escapeHtml(n)+'"></option>'; }).join('')+'</datalist>';
+}
 function addSale(d){
   const rec = { id:uid('sale'), date:d.date, customer:d.customer.trim(), description:(d.description||'').trim(),
     amount:Number(d.amount)||0, receivedNative:Number(d.receivedNative)||0, accountId:d.accountId||null,
+    payAccountId:d.payAccountId||null, payNative:Number(d.payNative)||0,
     dueDate:d.dueDate||'', notes:(d.notes||'').trim(), createdAt:nowISOTime() };
-  state.sales.push(rec); saveState(); return rec;
+  state.sales.push(rec); saveState();
+  rememberParty('customers', rec.customer);
+  return rec;
 }
 function addPurchase(d){
   const rec = { id:uid('pur'), date:d.date, supplier:d.supplier.trim(), description:(d.description||'').trim(),
     amount:Number(d.amount)||0, paidNative:Number(d.paidNative)||0, accountId:d.accountId||null,
+    receiveAccountId:d.receiveAccountId||null, receiveNative:Number(d.receiveNative)||0,
     dueDate:d.dueDate||'', notes:(d.notes||'').trim(), createdAt:nowISOTime() };
-  state.purchases.push(rec); saveState(); return rec;
+  state.purchases.push(rec); saveState();
+  rememberParty('suppliers', rec.supplier);
+  return rec;
 }
 function addCredit(d){
   const rec = { id:uid('cred'), type:d.type, party:d.party.trim(), amount:Number(d.amount)||0,
@@ -1098,9 +1170,9 @@ function renderAccountsMini(){
   return accs.map(function(a){
     return '<div style="display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid var(--border-soft)">'+
       '<div><div style="font-size:13px; font-weight:600">'+escapeHtml(a.name)+'</div>'+
-      '<div style="font-size:11px; color:var(--text-faint)">'+a.currency+(a.currency!=='NPR'?' · rate '+fmtNum(a.rate):'')+'</div></div>'+
+      '<div style="font-size:11px; color:var(--text-faint)">'+a.currency+(a.currency!==baseCurrency()?' · rate '+fmtNum(a.rate):'')+'</div></div>'+
       '<div style="text-align:right"><div class="mono" style="font-weight:700; font-size:13px">'+fmtNative(accountBalanceNative(a.id), a.currency)+'</div>'+
-      (a.currency!=='NPR' ? '<div style="font-size:11px; color:var(--text-faint)" class="mono">'+fmtNPR(accountBalanceNPR(a.id))+'</div>' : '')+
+      (a.currency!==baseCurrency() ? '<div style="font-size:11px; color:var(--text-faint)" class="mono">'+fmtNPR(accountBalanceNPR(a.id))+'</div>' : '')+
       '</div></div>';
   }).join('');
 }
@@ -1162,8 +1234,8 @@ function renderAccountsByType(type, label){
         (a.number ? '<div class="acct-num">'+escapeHtml(a.number)+'</div>' : '')+'</div>'+
         '<div class="acct-curr-badge">'+a.currency+'</div></div>'+
         '<div class="acct-balance">'+fmtNative(accountBalanceNative(a.id), a.currency)+'</div>'+
-        (a.currency!=='NPR' ? '<div class="acct-npr">≈ '+fmtNPR(accountBalanceNPR(a.id))+'</div>' : '')+
-        (a.currency!=='NPR' ? '<div class="acct-rate">1 '+a.currency+' = '+fmtNum(a.rate)+' NPR</div>' : '')+
+        (a.currency!==baseCurrency() ? '<div class="acct-npr">≈ '+fmtNPR(accountBalanceNPR(a.id))+'</div>' : '')+
+        (a.currency!==baseCurrency() ? '<div class="acct-rate">1 '+a.currency+' = '+fmtNum(a.rate)+' '+baseCurrency()+'</div>' : '')+
         '<div class="acct-actions"><button class="btn btn-ghost btn-sm" onclick="openAccountModal(\''+a.id+'\')">'+icon('edit')+' Edit</button>'+
         '<button class="btn btn-ghost btn-sm" onclick="handleRemoveAccount(\''+a.id+'\')">'+icon(accountHasHistory(a.id)?'archive':'trash')+' '+(accountHasHistory(a.id)?'Archive':'Delete')+'</button></div></div>';
     }).join('') + '</div>';
@@ -1194,44 +1266,63 @@ function selectAcctType(t){
 function onAcctCurrencyChange(){
   const cur = document.getElementById('fAcctCurrency').value;
   const wrap = document.getElementById('fAcctRateWrap');
-  wrap.style.display = cur==='NPR' ? 'none' : '';
-  if(cur!=='NPR'){ document.getElementById('fAcctRate').placeholder = 'e.g. '+(RATE_PLACEHOLDER[cur]||'1.00'); }
+  const customWrap = document.getElementById('fAcctCurrencyCustomWrap');
+  const isCustom = cur==='__custom__';
+  if(customWrap) customWrap.style.display = isCustom ? '' : 'none';
+  const effectiveIsBase = !isCustom && cur===baseCurrency();
+  wrap.style.display = effectiveIsBase ? 'none' : '';
+  if(!effectiveIsBase){
+    document.getElementById('fAcctRate').placeholder = 'e.g. '+(isCustom ? '1.00' : (RATE_PLACEHOLDER[cur]||'1.00'));
+  }
 }
 function openAccountModal(id){
   const acc = id ? getAccount(id) : null;
   selectedAcctType = acc ? acc.type : 'cash';
-  const currencyOptions = Object.keys(CURRENCIES).map(function(c){
-    return '<option value="'+c+'" '+(acc&&acc.currency===c?'selected':'')+'>'+c+(c==='NPR'?' (base)':'')+'</option>';
-  }).join('');
+  const knownCodes = STANDARD_CURRENCIES.concat(state.customCurrencies||[]);
+  const accCodeIsKnown = !acc || knownCodes.indexOf(acc.currency)!==-1;
+  const currencyOptions = knownCodes.map(function(c){
+    return '<option value="'+c+'" '+(acc&&acc.currency===c?'selected':'')+'>'+c+(c===baseCurrency()?' (base)':'')+'</option>';
+  }).join('') + '<option value="__custom__" '+(acc&&!accCodeIsKnown?'selected':'')+'>Other (custom unit, e.g. UC)</option>';
+  const customCodeVal = (acc&&!accCodeIsKnown) ? acc.currency : '';
   const body =
     '<div class="field full" style="margin-bottom:14px"><label>Account Type</label>'+
     '<div class="radio-row" id="acctTypeRow">'+['cash','bank','wallet'].map(function(t){
       return '<div class="radio-pill '+((!acc&&t==='cash')||(acc&&acc.type===t)?'on':'')+'" data-type="'+t+'" onclick="selectAcctType(\''+t+'\')">'+(t.charAt(0).toUpperCase()+t.slice(1))+'</div>';
     }).join('')+'</div></div>'+
     '<div class="form-grid">'+
-      '<div class="field full"><label>Name</label><input type="text" id="fAcctName" value="'+(acc?escapeHtml(acc.name):'')+'" placeholder="e.g. Main Cash, NIC Bank, Binance USDT"></div>'+
+      '<div class="field full"><label>Name</label><input type="text" id="fAcctName" value="'+(acc?escapeHtml(acc.name):'')+'" placeholder="e.g. Main Cash, NIC Bank, Garena Unipin"></div>'+
       '<div class="field"><label>Account / Wallet Number <span class="text-dim">(optional)</span></label><input type="text" id="fAcctNumber" value="'+(acc?escapeHtml(acc.number):'')+'" placeholder="e.g. 0123456789"></div>'+
-      '<div class="field"><label>Currency</label><select id="fAcctCurrency" onchange="onAcctCurrencyChange()">'+currencyOptions+'</select></div>'+
-      '<div class="field" id="fAcctRateWrap" style="'+((!acc||acc.currency==='NPR')?'display:none':'')+'"><label>Exchange Rate <span class="text-dim">(1 unit = ? NPR)</span></label>'+
-      '<input type="number" id="fAcctRate" step="0.0001" min="0" value="'+(acc&&acc.currency!=='NPR'?acc.rate:'')+'" placeholder="e.g. '+(RATE_PLACEHOLDER[acc?acc.currency:'USD']||'135.00')+'"></div>'+
+      '<div class="field"><label>Currency / Unit</label><select id="fAcctCurrency" onchange="onAcctCurrencyChange()">'+currencyOptions+'</select></div>'+
+      '<div class="field" id="fAcctCurrencyCustomWrap" style="'+(accCodeIsKnown?'display:none':'')+'"><label>Custom Unit Code</label><input type="text" id="fAcctCurrencyCustom" value="'+escapeHtml(customCodeVal)+'" maxlength="8" placeholder="e.g. UC"><div class="hint">Short code for a platform credit balance — Unipin UC, PUBG UC, a gift-card balance, etc.</div></div>'+
+      '<div class="field" id="fAcctRateWrap" style="'+((!acc||acc.currency===baseCurrency())?'display:none':'')+'"><label>Exchange Rate <span class="text-dim">(1 unit = ? '+baseCurrency()+')</span></label>'+
+      '<input type="number" id="fAcctRate" step="0.0001" min="0" value="'+(acc&&acc.currency!==baseCurrency()?acc.rate:'')+'" placeholder="e.g. '+(RATE_PLACEHOLDER[acc?acc.currency:'USD']||'135.00')+'"></div>'+
       '<div class="field"><label>'+(acc?'Balance':'Opening Balance')+' <span class="text-dim">(in account currency)</span></label><input type="number" id="fAcctBalance" step="0.01" value="'+(acc?acc.balance:'')+'" placeholder="0.00"></div>'+
     '</div>'+
-    '<div class="help-box">'+icon('alert')+'<div>Each account keeps its own exchange rate since real rates differ by source (bank vs P2P vs crypto). Editing the rate later updates this account\'s NPR value everywhere it\'s shown.</div></div>'+
+    '<div class="help-box">'+icon('alert')+'<div>Each account keeps its own exchange rate since real rates differ by source (bank vs P2P vs crypto vs platform credit). Editing the rate later updates this account\'s value in '+baseCurrency()+' everywhere it\'s shown.</div></div>'+
     '<div class="error-text" id="fAcctError"></div>'+
     '<div class="form-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button>'+
     '<button class="btn btn-primary" onclick="submitAccountForm('+(acc?("'"+acc.id+"'"):'null')+')">'+(acc?'Save Changes':'Add Account')+'</button></div>';
   openModal(acc?'Edit Account':'Add New Account', body);
 }
+function resolveAcctCurrency(){
+  const sel = document.getElementById('fAcctCurrency').value;
+  if(sel!=='__custom__') return sel;
+  return document.getElementById('fAcctCurrencyCustom').value.trim().toUpperCase().slice(0,8);
+}
 function submitAccountForm(id){
   const name = document.getElementById('fAcctName').value.trim();
   const number = document.getElementById('fAcctNumber').value.trim();
-  const currency = document.getElementById('fAcctCurrency').value;
+  const currency = resolveAcctCurrency();
   const rateInput = document.getElementById('fAcctRate');
-  const rate = currency==='NPR' ? 1 : Number(rateInput.value);
+  const rate = currency===baseCurrency() ? 1 : Number(rateInput.value);
   const balance = Number(document.getElementById('fAcctBalance').value)||0;
   const errEl = document.getElementById('fAcctError');
   if(!name){ errEl.textContent='Please enter an account name.'; return; }
-  if(currency!=='NPR' && (!rate || rate<=0)){ errEl.textContent='Please enter a valid exchange rate greater than 0.'; return; }
+  if(!currency){ errEl.textContent='Please enter a currency or unit code.'; return; }
+  if(currency!==baseCurrency() && (!rate || rate<=0)){ errEl.textContent='Please enter a valid exchange rate greater than 0.'; return; }
+  if(STANDARD_CURRENCIES.indexOf(currency)===-1 && (state.customCurrencies||[]).indexOf(currency)===-1){
+    state.customCurrencies = (state.customCurrencies||[]).concat([currency]);
+  }
   const data = { type:selectedAcctType, name:name, number:number, currency:currency, rate:rate, balance:balance };
   if(id){ updateAccount(id, data); toast('Account updated','success'); }
   else{ addAccount(data); toast('Account added','success'); }
@@ -1277,15 +1368,18 @@ function saleFormHtml(){
     '<div class="section-head"><h2>New Sale</h2><span class="badge badge-red" id="saleStatusBadge">Credit</span></div>'+
     '<div class="form-grid">'+
       '<div class="field"><label>Date</label><input type="date" id="sDate" value="'+todayISO()+'"></div>'+
-      '<div class="field"><label>Customer Name</label><input type="text" id="sCustomer" placeholder="e.g. Sujan Thapa"></div>'+
+      '<div class="field"><label>Customer Name</label><input type="text" id="sCustomer" list="customerNameList" placeholder="e.g. Sujan Thapa" autocomplete="off">'+partyDatalistHtml('customerNameList','customers')+'</div>'+
       '<div class="field full"><label>Description</label><input type="text" id="sDescription" placeholder="e.g. 5x Free Fire diamond top-up"></div>'+
-      '<div class="field"><label>Sale Amount (NPR)</label><input type="number" id="sAmount" min="0" step="0.01" placeholder="0.00" oninput="updateSalePreview()"></div>'+
+      '<div class="field"><label>Sale Amount ('+baseCurrency()+')</label><input type="number" id="sAmount" min="0" step="0.01" placeholder="0.00" oninput="updateSalePreview()"></div>'+
       '<div class="field"><label>Received Into</label><select id="sAccount" onchange="updateSalePreview()">'+acctOptions(null,null,'— Not received yet (Credit) —')+'</select></div>'+
       '<div class="field" id="sReceivedWrap" style="display:none"><label>Amount Received <span id="sReceivedCurLabel" class="text-dim"></span></label>'+
         '<div class="inline-suffix"><input type="number" id="sReceived" min="0" step="0.01" placeholder="0.00" oninput="updateSalePreview()">'+
         '<button type="button" class="btn btn-sm" onclick="fillFullSale()">Full amount</button></div>'+
         '<div class="convert-note" id="sConvertNote"></div></div>'+
       '<div class="field"><label>Due Date <span class="text-dim">(optional)</span></label><input type="date" id="sDueDate"></div>'+
+      '<div class="field"><label>Pay Account <span class="text-dim">(optional — deduct stock/credit like Unipin UC)</span></label><select id="sPayAccount" onchange="updateSalePayPreview()">'+acctOptions(null,null,'— None —')+'</select></div>'+
+      '<div class="field" id="sPayWrap" style="display:none"><label>Pay Amount <span id="sPayCurLabel" class="text-dim"></span></label><input type="number" id="sPayAmount" min="0" step="0.0001" placeholder="0.00" oninput="updateSalePayPreview()"></div>'+
+      '<div class="field full" id="sPayNoteWrap" style="display:none"><div class="convert-note" id="sPayNote"></div></div>'+
       '<div class="field full"><label>Notes <span class="text-dim">(optional)</span></label><input type="text" id="sNotes"></div>'+
     '</div>'+
     '<div class="error-text" id="sError"></div>'+
@@ -1303,7 +1397,7 @@ function updateSalePreview(){
   const amount = Number(document.getElementById('sAmount').value)||0;
   const received = Number(document.getElementById('sReceived').value)||0;
   const receivedNPR = received*acc.rate;
-  document.getElementById('sConvertNote').textContent = acc.currency!=='NPR' ? ('≈ '+fmtNPR(receivedNPR)+' at rate '+fmtNum(acc.rate)) : '';
+  document.getElementById('sConvertNote').textContent = acc.currency!==baseCurrency() ? ('≈ '+fmtNPR(receivedNPR)+' at rate '+fmtNum(acc.rate)) : '';
   if(receivedNPR<=0.004){ badge.textContent='Credit'; badge.className='badge badge-red'; }
   else if(receivedNPR < amount-0.004){ badge.textContent='Partial'; badge.className='badge badge-gold'; }
   else { badge.textContent='Paid'; badge.className='badge badge-green'; }
@@ -1315,6 +1409,23 @@ function fillFullSale(){
   document.getElementById('sReceived').value = (amount/(acc.rate||1)).toFixed(2);
   updateSalePreview();
 }
+function updateSalePayPreview(){
+  const accId = document.getElementById('sPayAccount').value;
+  const wrap = document.getElementById('sPayWrap');
+  const noteWrap = document.getElementById('sPayNoteWrap');
+  if(!accId){ wrap.style.display='none'; noteWrap.style.display='none'; return; }
+  wrap.style.display='';
+  const acc = getAccount(accId);
+  document.getElementById('sPayCurLabel').textContent = '('+acc.currency+')';
+  const payNative = Number(document.getElementById('sPayAmount').value)||0;
+  const note = document.getElementById('sPayNote');
+  if(payNative>0){
+    noteWrap.style.display='';
+    note.textContent = 'This sale will draw down '+fmtNative(payNative,acc.currency)+' ('+fmtNPR(payNative*acc.rate)+') from '+escapeHtml(acc.name)+', recorded as the fulfillment cost for this sale.';
+  } else {
+    noteWrap.style.display='none';
+  }
+}
 function submitSale(){
   const date=document.getElementById('sDate').value;
   const customer=document.getElementById('sCustomer').value.trim();
@@ -1324,10 +1435,13 @@ function submitSale(){
   const received=accountId?(Number(document.getElementById('sReceived').value)||0):0;
   const dueDate=document.getElementById('sDueDate').value;
   const notes=document.getElementById('sNotes').value;
+  const payAccountId=document.getElementById('sPayAccount').value || null;
+  const payNative=payAccountId?(Number(document.getElementById('sPayAmount').value)||0):0;
   const err=document.getElementById('sError');
   if(!date||!customer||!amount||amount<=0){ err.textContent='Please fill in date, customer name and a valid sale amount.'; return; }
   if(received<0){ err.textContent='Received amount cannot be negative.'; return; }
-  addSale({date:date,customer:customer,description:description,amount:amount,receivedNative:received,accountId:accountId,dueDate:dueDate,notes:notes});
+  if(payAccountId && payNative<=0){ err.textContent='Please enter the amount to deduct from '+escapeHtml(getAccount(payAccountId).name)+', or clear that field.'; return; }
+  addSale({date:date,customer:customer,description:description,amount:amount,receivedNative:received,accountId:accountId,dueDate:dueDate,notes:notes,payAccountId:payAccountId,payNative:payNative});
   toast('Sale recorded','success');
   err.textContent='';
   renderNewEntryBody();
@@ -1351,15 +1465,18 @@ function purchaseFormHtml(){
     '<div class="section-head"><h2>New Purchase</h2><span class="badge badge-red" id="purStatusBadge">Credit</span></div>'+
     '<div class="form-grid">'+
       '<div class="field"><label>Date</label><input type="date" id="pDate" value="'+todayISO()+'"></div>'+
-      '<div class="field"><label>Supplier Name</label><input type="text" id="pSupplier" placeholder="e.g. Garena Reseller"></div>'+
+      '<div class="field"><label>Supplier Name</label><input type="text" id="pSupplier" list="supplierNameList" placeholder="e.g. Garena Reseller" autocomplete="off">'+partyDatalistHtml('supplierNameList','suppliers')+'</div>'+
       '<div class="field full"><label>Description</label><input type="text" id="pDescription" placeholder="e.g. 200x Free Fire diamond stock"></div>'+
-      '<div class="field"><label>Purchase Amount (NPR)</label><input type="number" id="pAmount" min="0" step="0.01" placeholder="0.00" oninput="updatePurchasePreview()"></div>'+
+      '<div class="field"><label>Purchase Amount ('+baseCurrency()+')</label><input type="number" id="pAmount" min="0" step="0.01" placeholder="0.00" oninput="updatePurchasePreview()"></div>'+
       '<div class="field"><label>Paid From</label><select id="pAccount" onchange="updatePurchasePreview()">'+acctOptions(null,null,'— Not paid yet (Credit) —')+'</select></div>'+
       '<div class="field" id="pPaidWrap" style="display:none"><label>Amount Paid <span id="pPaidCurLabel" class="text-dim"></span></label>'+
         '<div class="inline-suffix"><input type="number" id="pPaid" min="0" step="0.01" placeholder="0.00" oninput="updatePurchasePreview()">'+
         '<button type="button" class="btn btn-sm" onclick="fillFullPurchase()">Full amount</button></div>'+
         '<div class="convert-note" id="pConvertNote"></div></div>'+
       '<div class="field"><label>Due Date <span class="text-dim">(optional)</span></label><input type="date" id="pDueDate"></div>'+
+      '<div class="field"><label>Receive Into <span class="text-dim">(optional — buying stock like USDT/UC/diamonds)</span></label><select id="pReceiveAccount" onchange="updatePurchaseReceivePreview()">'+acctOptions(null,null,'— None —')+'</select></div>'+
+      '<div class="field" id="pReceiveWrap" style="display:none"><label>Receive Amount <span id="pReceiveCurLabel" class="text-dim"></span></label><input type="number" id="pReceiveAmount" min="0" step="0.0001" placeholder="0.00" oninput="updatePurchaseReceivePreview()"></div>'+
+      '<div class="field full" id="pReceiveNoteWrap" style="display:none"><div class="convert-note" id="pReceiveNote"></div></div>'+
       '<div class="field full"><label>Notes <span class="text-dim">(optional)</span></label><input type="text" id="pNotes"></div>'+
     '</div>'+
     '<div class="error-text" id="pError"></div>'+
@@ -1377,7 +1494,7 @@ function updatePurchasePreview(){
   const amount=Number(document.getElementById('pAmount').value)||0;
   const paid=Number(document.getElementById('pPaid').value)||0;
   const paidNPR=paid*acc.rate;
-  document.getElementById('pConvertNote').textContent = acc.currency!=='NPR' ? ('≈ '+fmtNPR(paidNPR)+' at rate '+fmtNum(acc.rate)) : '';
+  document.getElementById('pConvertNote').textContent = acc.currency!==baseCurrency() ? ('≈ '+fmtNPR(paidNPR)+' at rate '+fmtNum(acc.rate)) : '';
   if(paidNPR<=0.004){ badge.textContent='Credit'; badge.className='badge badge-red'; }
   else if(paidNPR<amount-0.004){ badge.textContent='Partial'; badge.className='badge badge-gold'; }
   else { badge.textContent='Paid'; badge.className='badge badge-green'; }
@@ -1389,6 +1506,32 @@ function fillFullPurchase(){
   document.getElementById('pPaid').value=(amount/(acc.rate||1)).toFixed(2);
   updatePurchasePreview();
 }
+function updatePurchaseReceivePreview(){
+  const accId = document.getElementById('pReceiveAccount').value;
+  const wrap = document.getElementById('pReceiveWrap');
+  const noteWrap = document.getElementById('pReceiveNoteWrap');
+  if(!accId){ wrap.style.display='none'; noteWrap.style.display='none'; return; }
+  wrap.style.display='';
+  const acc = getAccount(accId);
+  document.getElementById('pReceiveCurLabel').textContent = '('+acc.currency+')';
+  const amount = Number(document.getElementById('pAmount').value)||0;
+  const receiveNative = Number(document.getElementById('pReceiveAmount').value)||0;
+  const receiveNPR = receiveNative*acc.rate;
+  const note = document.getElementById('pReceiveNote');
+  if(receiveNative>0){
+    noteWrap.style.display='';
+    const spread = amount - receiveNPR;
+    let msg = '≈ '+fmtNPR(receiveNPR)+' worth received into '+escapeHtml(acc.name)+'.';
+    if(Math.abs(spread)>0.5){
+      msg += spread>0 ? (' Remaining '+fmtNPR(spread)+' recorded as a cost (exchange fee/spread) — not the full purchase amount.') : (' You are receiving '+fmtNPR(-spread)+' more value than the purchase amount — recorded as a gain.');
+    } else {
+      msg += ' A clean asset swap — no extra cost recorded beyond this.';
+    }
+    note.textContent = msg;
+  } else {
+    noteWrap.style.display='none';
+  }
+}
 function submitPurchase(){
   const date=document.getElementById('pDate').value;
   const supplier=document.getElementById('pSupplier').value.trim();
@@ -1398,10 +1541,18 @@ function submitPurchase(){
   const paid=accountId?(Number(document.getElementById('pPaid').value)||0):0;
   const dueDate=document.getElementById('pDueDate').value;
   const notes=document.getElementById('pNotes').value;
+  const receiveAccountId=document.getElementById('pReceiveAccount').value || null;
+  const receiveNative=receiveAccountId?(Number(document.getElementById('pReceiveAmount').value)||0):0;
   const err=document.getElementById('pError');
   if(!date||!supplier||!amount||amount<=0){ err.textContent='Please fill in date, supplier name and a valid purchase amount.'; return; }
   if(paid<0){ err.textContent='Paid amount cannot be negative.'; return; }
-  addPurchase({date:date,supplier:supplier,description:description,amount:amount,paidNative:paid,accountId:accountId,dueDate:dueDate,notes:notes});
+  if(receiveAccountId){
+    if(!accountId){ err.textContent='A "Receive Into" purchase needs a "Paid From" account too — it is an exchange between two of your accounts.'; return; }
+    if(paid<=0){ err.textContent='Please enter the amount paid for this exchange.'; return; }
+    if(receiveNative<=0){ err.textContent='Please enter the amount received into "'+escapeHtml(getAccount(receiveAccountId).name)+'".'; return; }
+    if(receiveAccountId===accountId){ err.textContent='"Paid From" and "Receive Into" must be different accounts.'; return; }
+  }
+  addPurchase({date:date,supplier:supplier,description:description,amount:amount,paidNative:paid,accountId:accountId,dueDate:dueDate,notes:notes,receiveAccountId:receiveAccountId,receiveNative:receiveNative});
   toast('Purchase recorded','success');
   err.textContent='';
   renderNewEntryBody();
@@ -1431,7 +1582,7 @@ function creditFormHtml(){
     '<div class="form-grid">'+
       '<div class="field"><label>Date</label><input type="date" id="cDate" value="'+todayISO()+'"></div>'+
       '<div class="field"><label>Party Name</label><input type="text" id="cParty" placeholder="e.g. Ramesh Shrestha"></div>'+
-      '<div class="field"><label>Amount (NPR)</label><input type="number" id="cAmount" min="0" step="0.01" placeholder="0.00" oninput="updateCreditPreview()"></div>'+
+      '<div class="field"><label>Amount ('+baseCurrency()+')</label><input type="number" id="cAmount" min="0" step="0.01" placeholder="0.00" oninput="updateCreditPreview()"></div>'+
       '<div class="field"><label>Account Involved <span class="text-dim">(optional)</span></label><select id="cAccount" onchange="updateCreditPreview()">'+acctOptions(null,null,'— No account (just record the due) —')+'</select></div>'+
       '<div class="field"><label>Due Date <span class="text-dim">(optional)</span></label><input type="date" id="cDueDate"></div>'+
       '<div class="field"><label>Notes <span class="text-dim">(optional)</span></label><input type="text" id="cNotes"></div>'+
@@ -1453,7 +1604,7 @@ function updateCreditPreview(){
   if(!accId){ note.textContent=''; return; }
   const acc=getAccount(accId);
   const amount=Number(document.getElementById('cAmount').value)||0;
-  if(acc.currency==='NPR'){ note.textContent=''; return; }
+  if(acc.currency===baseCurrency()){ note.textContent=''; return; }
   note.textContent = 'Equivalent to '+fmtNative(amount/(acc.rate||1), acc.currency)+' moving '+(selectedCreditType==='given'?'out of ':'into ')+acc.name+' at rate '+fmtNum(acc.rate);
 }
 function submitCredit(){
@@ -1562,7 +1713,7 @@ function updateCurLabelAndConvert(accSelId, labelId, amtId, noteId){
   const acc=getAccount(accId);
   labelEl.textContent='('+acc.currency+')';
   const amt=Number(document.getElementById(amtId).value)||0;
-  noteEl.textContent = acc.currency!=='NPR' ? ('≈ '+fmtNPR(amt*acc.rate)+' at rate '+fmtNum(acc.rate)) : '';
+  noteEl.textContent = acc.currency!==baseCurrency() ? ('≈ '+fmtNPR(amt*acc.rate)+' at rate '+fmtNum(acc.rate)) : '';
 }
 function submitCashTx(kind){
   const p = kind==='in'?'ci':'co';
@@ -1652,7 +1803,7 @@ function cashTxListHtml(kind){
     const acc=getAccount(t.accountId);
     return '<tr><td>'+fmtDate(t.date)+'</td><td>'+(acc?escapeHtml(acc.name):'<span class="text-dim">Deleted account</span>')+'</td>'+
       '<td>'+escapeHtml(t.category)+'</td><td class="num">'+(acc?fmtNative(t.amount,acc.currency):fmtNum(t.amount))+'</td>'+
-      '<td class="num text-dim">'+(acc&&acc.currency!=='NPR'?fmtNPR(cashTxNPR(t)):'')+'</td>'+
+      '<td class="num text-dim">'+(acc&&acc.currency!==baseCurrency()?fmtNPR(cashTxNPR(t)):'')+'</td>'+
       '<td>'+escapeHtml(t.note||'')+'</td>'+
       '<td><button class="btn btn-ghost btn-sm" onclick="deleteRecordConfirm(\'cashTx\',\''+t.id+'\')">'+icon('trash')+'</button></td></tr>';
   }).join('');
@@ -1722,7 +1873,7 @@ function exportSalesCSV(){
   const from=document.getElementById('srFrom').value, to=document.getElementById('srTo').value, statusF=document.getElementById('srStatus').value;
   let list = state.sales.filter(function(s){ return (!from||s.date>=from)&&(!to||s.date<=to); });
   if(statusF) list = list.filter(function(s){ return saleStatus(s)===statusF; });
-  const rows=[['Date','Customer','Description','Account','Amount (NPR)','Due (NPR)','Status']];
+  const rows=[['Date','Customer','Description','Account','Amount ('+baseCurrency()+')','Due ('+baseCurrency()+')','Status']];
   list.forEach(function(s){ const acc=s.accountId?getAccount(s.accountId):null; rows.push([s.date,s.customer,s.description||'',acc?acc.name:'',s.amount,Math.max(0,saleDue(s)).toFixed(2),saleStatus(s)]); });
   downloadCSV(rows,'sales-report.csv');
 }
@@ -1773,7 +1924,7 @@ function exportPurchaseCSV(){
   const from=document.getElementById('prFrom').value, to=document.getElementById('prTo').value, statusF=document.getElementById('prStatus').value;
   let list=state.purchases.filter(function(p){ return (!from||p.date>=from)&&(!to||p.date<=to); });
   if(statusF) list=list.filter(function(p){ return purchaseStatus(p)===statusF; });
-  const rows=[['Date','Supplier','Description','Account','Amount (NPR)','Due (NPR)','Status']];
+  const rows=[['Date','Supplier','Description','Account','Amount ('+baseCurrency()+')','Due ('+baseCurrency()+')','Status']];
   list.forEach(function(p){ const acc=p.accountId?getAccount(p.accountId):null; rows.push([p.date,p.supplier,p.description||'',acc?acc.name:'',p.amount,Math.max(0,purchaseDue(p)).toFixed(2),purchaseStatus(p)]); });
   downloadCSV(rows,'purchase-report.csv');
 }
@@ -1822,7 +1973,7 @@ function exportMoneyFlowCSV(){
   const res=moneyFlowTotals(from||null,to||null);
   let events=res.events;
   if(accF) events=events.filter(function(e){ return e.accountId===accF; });
-  const rows=[['Date','Direction','Description','Account','Amount (NPR)']];
+  const rows=[['Date','Direction','Description','Account','Amount ('+baseCurrency()+')']];
   events.forEach(function(e){ const acc=getAccount(e.accountId); rows.push([e.date,e.direction,e.label||'',acc?acc.name:'',(e.direction==='in'?e.amountNPR:-e.amountNPR).toFixed(2)]); });
   downloadCSV(rows,'money-flow-report.csv');
 }
@@ -1862,7 +2013,7 @@ function dueTableHtml(list, tone){
   return '<div class="table-wrap"><table><thead><tr><th>Party</th><th>Date</th><th>Due Date</th><th class="num">Total</th><th class="num">Remaining</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
 function exportDueCSV(){
-  const rows=[['Kind','Source','Party','Date','Due Date','Total (NPR)','Remaining (NPR)']];
+  const rows=[['Kind','Source','Party','Date','Due Date','Total ('+baseCurrency()+')','Remaining ('+baseCurrency()+')']];
   state.sales.forEach(function(s){ const d=saleDue(s); if(d>0.004) rows.push(['Receivable','Sale',s.customer,s.date,s.dueDate||'',s.amount,d.toFixed(2)]); });
   state.credits.filter(function(c){ return c.type==='given'; }).forEach(function(c){ const d=creditDue(c); if(d>0.004) rows.push(['Receivable','Credit',c.party,c.date,c.dueDate||'',c.amount,d.toFixed(2)]); });
   state.purchases.forEach(function(p){ const d=purchaseDue(p); if(d>0.004) rows.push(['Payable','Purchase',p.supplier,p.date,p.dueDate||'',p.amount,d.toFixed(2)]); });
@@ -1896,7 +2047,7 @@ function onSettleAmountInput(remaining){
   document.getElementById('stCurLabel').textContent='('+acc.currency+')';
   const amt=Number(document.getElementById('stAmount').value)||0;
   const nprEquiv=amt*acc.rate;
-  note.textContent = (acc.currency!=='NPR'?('≈ '+fmtNPR(nprEquiv)+' · '):'')+'Remaining after this: '+fmtNPR(Math.max(0,remaining-nprEquiv));
+  note.textContent = (acc.currency!==baseCurrency()?('≈ '+fmtNPR(nprEquiv)+' · '):'')+'Remaining after this: '+fmtNPR(Math.max(0,remaining-nprEquiv));
 }
 function submitSettlement(refType, refId, remaining){
   const date=document.getElementById('stDate').value;
@@ -1955,7 +2106,7 @@ function trialBalanceHtml(){
 }
 function exportTrialBalanceCSV(){
   const tb=calcTrialBalance();
-  const rows=[['Debit Account','Debit Amount (NPR)','Credit Account','Credit Amount (NPR)']];
+  const rows=[['Debit Account','Debit Amount ('+baseCurrency()+')','Credit Account','Credit Amount ('+baseCurrency()+')']];
   const n=Math.max(tb.dr.length,tb.cr.length);
   for(let i=0;i<n;i++){ rows.push([tb.dr[i]?tb.dr[i].label:'', tb.dr[i]?tb.dr[i].amount.toFixed(2):'', tb.cr[i]?tb.cr[i].label:'', tb.cr[i]?tb.cr[i].amount.toFixed(2):'']); }
   rows.push(['TOTAL', tb.totalDr.toFixed(2), 'TOTAL', tb.totalCr.toFixed(2)]);
@@ -1980,7 +2131,7 @@ function plHtml(){
 }
 function exportPLCSV(){
   const pl=calcProfitLoss();
-  const rows=[['Section','Item','Amount (NPR)']];
+  const rows=[['Section','Item','Amount ('+baseCurrency()+')']];
   rows.push(['Revenue','Sales Revenue',pl.salesRevenue.toFixed(2)]);
   Object.keys(pl.incomeByCategory).forEach(function(k){ rows.push(['Revenue',k,pl.incomeByCategory[k].toFixed(2)]); });
   rows.push(['Revenue','TOTAL REVENUE',pl.totalRevenue.toFixed(2)]);
@@ -2015,7 +2166,7 @@ function balanceSheetHtml(){
 }
 function exportBalanceSheetCSV(){
   const bs=calcBalanceSheet();
-  const rows=[['Section','Item','Amount (NPR)']];
+  const rows=[['Section','Item','Amount ('+baseCurrency()+')']];
   bs.accounts.filter(function(a){ return !a.archived || Math.abs(a.balanceNPR)>0.004; }).forEach(function(a){ rows.push(['Assets',a.name+' ('+a.currency+')'+(a.archived?' (archived)':''),a.balanceNPR.toFixed(2)]); });
   rows.push(['Assets','Accounts Receivable',bs.AR.toFixed(2)]);
   rows.push(['Assets','TOTAL ASSETS',bs.totalAssets.toFixed(2)]);
@@ -2036,8 +2187,15 @@ function renderSettings(){
   const el=document.getElementById('page-settings');
   el.innerHTML=
     '<div class="grid-2"><div>'+
-      '<div class="card"><div class="section-head"><h2>Business</h2></div>'+
-        '<div class="field"><label>Business Name</label><input type="text" id="setBizName" value="'+escapeHtml(state.meta.businessName)+'"></div>'+
+      '<div class="card"><div class="section-head"><h2>Business</h2><p>Shown on the dashboard and on printed reports.</p></div>'+
+        '<div class="field"><label>Business / Company Name</label><input type="text" id="setBizName" value="'+escapeHtml(state.meta.businessName)+'"></div>'+
+        '<div class="field" style="margin-top:12px"><label>Company Logo <span class="text-dim">(optional, shown on printed reports)</span></label>'+
+          '<div style="display:flex; align-items:center; gap:12px; margin-top:4px">'+
+            (state.meta.logoDataUrl ? '<img src="'+state.meta.logoDataUrl+'" alt="Logo" style="height:44px; max-width:120px; object-fit:contain; border-radius:6px; background:var(--surface-2); border:1px solid var(--border-soft); padding:4px">' : '<div style="height:44px; width:80px; border-radius:6px; background:var(--surface-2); border:1px dashed var(--border); display:flex; align-items:center; justify-content:center; font-size:10.5px; color:var(--text-faint)">No logo</div>')+
+            '<button class="btn btn-sm" onclick="document.getElementById(\'logoFileInput\').click()">'+icon('upload')+' Upload Logo</button>'+
+            (state.meta.logoDataUrl ? '<button class="btn btn-ghost btn-sm" onclick="removeLogo()">Remove</button>' : '')+
+            '<input type="file" id="logoFileInput" accept="image/*" style="display:none" onchange="handleLogoUpload(event)">'+
+          '</div><div class="hint" style="margin-top:6px">PNG or JPG, resized automatically to keep things fast.</div></div>'+
         '<div class="form-actions"><button class="btn btn-primary" onclick="saveBizName()">Save</button></div></div>'+
       '<div class="card"><div class="section-head"><h2>Backup &amp; Restore</h2><p>Your data lives only in this browser. Export regularly to avoid losing it.</p></div>'+
         '<div class="btn-group">'+
@@ -2045,7 +2203,12 @@ function renderSettings(){
           '<button class="btn" onclick="document.getElementById(\'importFileInput\').click()">'+icon('upload')+' Import Data (JSON)</button>'+
           '<input type="file" id="importFileInput" accept="application/json" style="display:none" onchange="handleImportFile(event)">'+
         '</div></div>'+
-      '<div class="card"><div class="section-head"><h2>Currency Rates</h2><p>Quick view of every account\'s current rate to NPR.</p></div>'+rateOverviewHtml()+'</div>'+
+      '<div class="card"><div class="section-head"><h2>Base Currency</h2><p>All reports and totals are shown in this currency.</p></div>'+
+        '<div style="display:flex; align-items:center; justify-content:space-between; gap:10px">'+
+          '<div><span class="currency-tag" style="font-size:13px; padding:6px 10px">'+baseCurrency()+'</span> <span style="font-size:12.5px; color:var(--text-dim); margin-left:8px">'+currencyInfo(baseCurrency()).name+'</span></div>'+
+          '<button class="btn" onclick="openBaseCurrencyModal()">Change Base Currency</button>'+
+        '</div></div>'+
+      '<div class="card"><div class="section-head"><h2>Currency Rates</h2><p>Quick view of every account\'s current rate to '+baseCurrency()+'.</p></div>'+rateOverviewHtml()+'</div>'+
     '</div><div>'+
       '<div class="card"><div class="section-head"><h2>Appearance</h2></div>'+
         '<p style="font-size:12.5px; color:var(--text-dim); margin-bottom:10px">Current theme: <strong>'+(state.meta.theme==='dark'?'Dark':'Light')+'</strong></p>'+
@@ -2056,12 +2219,12 @@ function renderSettings(){
     '</div></div>';
 }
 function rateOverviewHtml(){
-  const nonNpr = state.accounts.filter(function(a){ return a.currency!=='NPR'; });
-  if(!nonNpr.length) return '<p style="font-size:12.5px; color:var(--text-faint)">No foreign-currency accounts yet. Add a wallet in INR, USD or USDT to set its rate.</p>';
-  return nonNpr.map(function(a){
+  const nonBase = state.accounts.filter(function(a){ return a.currency!==baseCurrency(); });
+  if(!nonBase.length) return '<p style="font-size:12.5px; color:var(--text-faint)">No foreign-currency accounts yet. Add a wallet in a different currency or unit to set its rate.</p>';
+  return nonBase.map(function(a){
     return '<div style="display:flex; justify-content:space-between; align-items:center; padding:9px 0; border-bottom:1px solid var(--border-soft)">'+
       '<div><span class="currency-tag">'+a.currency+'</span> <span style="font-size:13px; margin-left:6px">'+escapeHtml(a.name)+'</span></div>'+
-      '<div class="mono" style="font-size:13px">1 '+a.currency+' = '+fmtNum(a.rate)+' NPR <button class="btn btn-ghost btn-sm" onclick="openAccountModal(\''+a.id+'\')" style="margin-left:8px">'+icon('edit')+'</button></div></div>';
+      '<div class="mono" style="font-size:13px">1 '+a.currency+' = '+fmtNum(a.rate)+' '+baseCurrency()+' <button class="btn btn-ghost btn-sm" onclick="openAccountModal(\''+a.id+'\')" style="margin-left:8px">'+icon('edit')+'</button></div></div>';
   }).join('');
 }
 function toggleThemeFromSettings(){
@@ -2073,6 +2236,105 @@ function saveBizName(){
   saveState();
   document.getElementById('brandNameDisplay').textContent = state.meta.businessName;
   toast('Business name saved','success');
+}
+function handleLogoUpload(evt){
+  const file = evt.target.files && evt.target.files[0];
+  if(!file) return;
+  if(!/^image\//.test(file.type)){ toast('Please choose an image file (PNG or JPG).','error'); evt.target.value=''; return; }
+  if(file.size > 5*1024*1024){ toast('That image is too large — please use one under 5MB.','error'); evt.target.value=''; return; }
+  const reader = new FileReader();
+  reader.onerror = function(){ toast('Could not read that file.','error'); };
+  reader.onload = function(e){
+    const img = new Image();
+    img.onerror = function(){ toast('Could not read that image.','error'); };
+    img.onload = function(){
+      try{
+        const maxDim = 240;
+        let w = img.width || 1, h = img.height || 1;
+        if(w>maxDim || h>maxDim){
+          if(w>=h){ h = Math.max(1,Math.round(h*(maxDim/w))); w = maxDim; }
+          else { w = Math.max(1,Math.round(w*(maxDim/h))); h = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if(!ctx) throw new Error('canvas unsupported');
+        ctx.drawImage(img, 0, 0, w, h);
+        state.meta.logoDataUrl = canvas.toDataURL('image/png');
+        saveState();
+        toast('Logo uploaded','success');
+        renderSettings();
+      }catch(err){
+        console.error(err);
+        toast('Could not process that image in this browser.','error');
+      }
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  evt.target.value='';
+}
+function removeLogo(){
+  state.meta.logoDataUrl = null;
+  saveState();
+  toast('Logo removed','success');
+  renderSettings();
+}
+function openBaseCurrencyModal(){
+  const current = baseCurrency();
+  const options = STANDARD_CURRENCIES.filter(function(c){ return c!==current; }).map(function(c){
+    return '<option value="'+c+'">'+c+' — '+currencyInfo(c).name+'</option>';
+  }).join('');
+  const body =
+    '<p style="font-size:13px; margin-bottom:14px">Your current base currency is <strong>'+current+'</strong>. Switching converts every sale, purchase and credit amount, and re-sets every account\'s exchange rate, so all reports keep balancing correctly.</p>'+
+    '<div class="form-grid">'+
+      '<div class="field"><label>New Base Currency</label><select id="bcNew" onchange="onBaseCurrencyPick()">'+options+'</select></div>'+
+      '<div class="field"><label id="bcRateLabel">Today\'s Rate</label><input type="number" id="bcRate" step="0.0001" min="0" placeholder="0.00" oninput="onBaseCurrencyPick()"></div>'+
+    '</div>'+
+    '<div id="bcPreview" class="convert-note" style="margin-top:6px"></div>'+
+    '<div class="help-box">'+icon('alert')+'<div>A backup of your current data downloads automatically right before this runs, just in case. This changes stored numbers — not just labels — so double-check the rate before confirming.</div></div>'+
+    '<div class="error-text" id="bcError"></div>'+
+    '<div class="form-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitBaseCurrencyChange()">Convert &amp; Switch</button></div>';
+  openModal('Change Base Currency', body);
+  onBaseCurrencyPick();
+}
+function onBaseCurrencyPick(){
+  const newBase = document.getElementById('bcNew').value;
+  const current = baseCurrency();
+  document.getElementById('bcRateLabel').textContent = '1 '+newBase+' = ? '+current;
+  document.getElementById('bcRate').placeholder = 'e.g. '+(RATE_PLACEHOLDER[newBase]||'1.00');
+  const rate = Number(document.getElementById('bcRate').value);
+  const preview = document.getElementById('bcPreview');
+  const n = state.sales.length + state.purchases.length + state.credits.length;
+  const accN = state.accounts.length;
+  if(!rate || rate<=0){ preview.textContent = n+' sale/purchase/credit entries and '+accN+' account rate(s) will be converted once you enter a rate.'; return; }
+  const sampleOld = 1000;
+  const sampleNew = sampleOld / rate;
+  preview.textContent = 'e.g. an entry of '+fmtNative(sampleOld,current)+' becomes '+fmtNative(sampleNew,newBase)+'. This will apply to '+n+' entries and '+accN+' account rate(s).';
+}
+function migrateBaseCurrency(newBase, referenceRate){
+  // referenceRate: 1 newBase = referenceRate (old base) units
+  state.sales.forEach(function(s){ s.amount = s.amount / referenceRate; });
+  state.purchases.forEach(function(p){ p.amount = p.amount / referenceRate; });
+  state.credits.forEach(function(c){ c.amount = c.amount / referenceRate; });
+  state.accounts.forEach(function(a){
+    if(a.currency===newBase){ a.rate = 1; }
+    else { a.rate = (a.rate||1) / referenceRate; }
+  });
+  state.meta.baseCurrency = newBase;
+  saveState();
+}
+function submitBaseCurrencyChange(){
+  const newBase = document.getElementById('bcNew').value;
+  const rate = Number(document.getElementById('bcRate').value);
+  const err = document.getElementById('bcError');
+  if(!rate || rate<=0){ err.textContent = 'Please enter a valid rate greater than 0.'; return; }
+  exportAllData();
+  migrateBaseCurrency(newBase, rate);
+  closeModal();
+  toast('Base currency switched to '+newBase,'success');
+  renderSettings();
+  if(currentPage==='dashboard') renderDashboard();
 }
 function resetAllData(){
   if(confirm('This will permanently erase ALL data in this app. This cannot be undone. Continue?')){
