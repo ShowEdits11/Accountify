@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>QwikGold — Accounting Ledger</title>
+<title>QwikGold Limited — Accounting Ledger</title>
 <style>
 /* ============================================================
    DESIGN TOKENS
@@ -513,6 +513,7 @@ tfoot td{padding:12px 14px; font-weight:700; background:var(--surface-2); border
 const STORAGE_KEY = 'khata_accountant_state_v1';
 
 const STANDARD_CURRENCIES = ['NPR','INR','USD','USDT','BDT'];
+window.STANDARD_CURRENCIES = STANDARD_CURRENCIES;
 const CURRENCIES = {
   NPR:  { symbol:'Rs. ', suffix:'', isSuffix:false, name:'Nepalese Rupee' },
   INR:  { symbol:'₹',    suffix:'', isSuffix:false, name:'Indian Rupee' },
@@ -520,6 +521,7 @@ const CURRENCIES = {
   USDT: { symbol:'',     suffix:' USDT', isSuffix:true, name:'Tether' },
   BDT:  { symbol:'৳',    suffix:'', isSuffix:false, name:'Bangladeshi Taka' },
 };
+window.CURRENCIES = CURRENCIES;
 // Any currency code the user types that isn't one of the standard five (e.g. "UC" for a reseller
 // credit balance) is treated as a custom unit and displayed as "amount CODE" automatically.
 function currencyInfo(code){
