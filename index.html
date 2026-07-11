@@ -182,7 +182,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 
 .content{
   flex:1; padding:24px; max-width:1400px; width:100%; margin:0 auto;
-  background-image:repeating-linear-gradient(var(--bg) 0 27px, var(--border-soft) 27px 28px);
   background-attachment:local;
 }
 [data-theme="light"] .content{background-image:none;}
@@ -1379,7 +1378,7 @@ function saleFormHtml(){
         '<button type="button" class="btn btn-sm" onclick="fillFullSale()">Full amount</button></div>'+
         '<div class="convert-note" id="sConvertNote"></div></div>'+
       '<div class="field"><label>Due Date <span class="text-dim">(optional)</span></label><input type="date" id="sDueDate"></div>'+
-      '<div class="field"><label>Pay Account <span class="text-dim">(optional — deduct stock/credit like Unipin UC)</span></label><select id="sPayAccount" onchange="updateSalePayPreview()">'+acctOptions(null,null,'— None —')+'</select></div>'+
+      '<div class="field"><label>Pay Account <span class="text-dim">(optional)</span></label><select id="sPayAccount" onchange="updateSalePayPreview()">'+acctOptions(null,null,'— None —')+'</select></div>'+
       '<div class="field" id="sPayWrap" style="display:none"><label>Pay Amount <span id="sPayCurLabel" class="text-dim"></span></label><input type="number" id="sPayAmount" min="0" step="0.0001" placeholder="0.00" oninput="updateSalePayPreview()"></div>'+
       '<div class="field full" id="sPayNoteWrap" style="display:none"><div class="convert-note" id="sPayNote"></div></div>'+
       '<div class="field full"><label>Notes <span class="text-dim">(optional)</span></label><input type="text" id="sNotes"></div>'+
@@ -1476,7 +1475,7 @@ function purchaseFormHtml(){
         '<button type="button" class="btn btn-sm" onclick="fillFullPurchase()">Full amount</button></div>'+
         '<div class="convert-note" id="pConvertNote"></div></div>'+
       '<div class="field"><label>Due Date <span class="text-dim">(optional)</span></label><input type="date" id="pDueDate"></div>'+
-      '<div class="field"><label>Receive Into <span class="text-dim">(optional — buying stock like USDT/UC/diamonds)</span></label><select id="pReceiveAccount" onchange="updatePurchaseReceivePreview()">'+acctOptions(null,null,'— None —')+'</select></div>'+
+      '<div class="field"><label>Receive Into <span class="text-dim">(optional)</span></label><select id="pReceiveAccount" onchange="updatePurchaseReceivePreview()">'+acctOptions(null,null,'— None —')+'</select></div>'+
       '<div class="field" id="pReceiveWrap" style="display:none"><label>Receive Amount <span id="pReceiveCurLabel" class="text-dim"></span></label><input type="number" id="pReceiveAmount" min="0" step="0.0001" placeholder="0.00" oninput="updatePurchaseReceivePreview()"></div>'+
       '<div class="field full" id="pReceiveNoteWrap" style="display:none"><div class="convert-note" id="pReceiveNote"></div></div>'+
       '<div class="field full"><label>Notes <span class="text-dim">(optional)</span></label><input type="text" id="pNotes"></div>'+
