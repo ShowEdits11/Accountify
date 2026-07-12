@@ -842,13 +842,18 @@ function calcCore(){
   const otherIncome = otherIncomeTx + transferGain + purchaseExchangeGain;
   const otherExpenses = otherExpenseTx + transferFee + purchaseExchangeFee + saleCogs;
   const netProfit = totalSales + otherIncome - purchaseCostForPL - otherExpenses;
-  const openingBalances = state.accounts.reduce(function(s,a){ return s+(Number(a.balance)||0)*a.rate; },0)
+  // Opening balances use the rate that was frozen when each account was created/last had its
+  // opening balance corrected - NEVER the account's current rate, for the same reason sale/purchase
+  // costs are frozen. The gap this creates versus each account's current mark-to-market value is
+  // captured below as fxRevaluation, which is what keeps the Balance Sheet balancing.
+  const openingBalances = state.accounts.reduce(function(s,a){ return s+(Number(a.balance)||0)*(a.openingRateSnapshot!=null?a.openingRateSnapshot:a.rate); },0)
     + state.credits.filter(function(c){ return !c.accountId; }).reduce(function(s,c){ return s+(c.type==='given'?(Number(c.amount)||0):-(Number(c.amount)||0)); },0);
+  const fxRevaluation = totalFXRevaluation();
   const AR = state.sales.reduce(function(s,x){ return s+Math.max(0,saleDue(x)); },0)
     + state.credits.filter(function(c){ return c.type==='given'; }).reduce(function(s,c){ return s+Math.max(0,creditDue(c)); },0);
   const AP = state.purchases.reduce(function(s,x){ return s+Math.max(0,purchaseDue(x)); },0)
     + state.credits.filter(function(c){ return c.type==='taken'; }).reduce(function(s,c){ return s+Math.max(0,creditDue(c)); },0);
-  const totalEquity = openingBalances + capitalIn - drawings + netProfit;
+  const totalEquity = openingBalances + capitalIn - drawings + netProfit + fxRevaluation;
   const totalAccountsNPR = state.accounts.reduce(function(s,a){ return s+accountBalanceNPR(a.id); },0);
   const totalAssets = totalAccountsNPR + AR;
   const totalLiabPlusEquity = AP + totalEquity;
@@ -857,7 +862,7 @@ function calcCore(){
     capitalIn:capitalIn, drawings:drawings, saleCogs:saleCogs,
     otherIncome:otherIncome, otherExpenses:otherExpenses, otherIncomeTx:otherIncomeTx, otherExpenseTx:otherExpenseTx,
     transferFee:transferFee, transferGain:transferGain, purchaseExchangeFee:purchaseExchangeFee, purchaseExchangeGain:purchaseExchangeGain, netProfit:netProfit,
-    openingBalances:openingBalances, AR:AR, AP:AP, totalEquity:totalEquity, totalAccountsNPR:totalAccountsNPR,
+    openingBalances:openingBalances, fxRevaluation:fxRevaluation, AR:AR, AP:AP, totalEquity:totalEquity, totalAccountsNPR:totalAccountsNPR,
     totalAssets:totalAssets, totalLiabPlusEquity:totalLiabPlusEquity,
     balanced: Math.abs(totalAssets-totalLiabPlusEquity) < 0.02,
   };
@@ -962,7 +967,7 @@ function calcBalanceSheet(){
   const c = calcCore();
   return {
     accounts: state.accounts.map(function(a){ return { id:a.id, name:a.name, currency:a.currency, balanceNative:accountBalanceNative(a.id), balanceNPR:accountBalanceNPR(a.id), archived:a.archived }; }),
-    AR: c.AR, AP: c.AP, openingBalances: c.openingBalances, capitalIn: c.capitalIn, drawings: c.drawings, netProfit: c.netProfit,
+    AR: c.AR, AP: c.AP, openingBalances: c.openingBalances, capitalIn: c.capitalIn, drawings: c.drawings, netProfit: c.netProfit, fxRevaluation: c.fxRevaluation,
     totalEquity: c.totalEquity, totalAssets: c.totalAssets, totalLiabPlusEquity: c.totalLiabPlusEquity, balanced: c.balanced,
   };
 }
@@ -981,6 +986,8 @@ function calcTrialBalance(){
   if(c.openingBalances>0.004) cr.push({label:'Opening Balances & Adjustments', amount:c.openingBalances});
   else if(c.openingBalances<-0.004) dr.push({label:'Opening Balances & Adjustments', amount:-c.openingBalances});
   if(c.capitalIn>0.004) cr.push({label:'Capital Contributed', amount:c.capitalIn});
+  if(c.fxRevaluation>0.004) cr.push({label:'Unrealized FX Gain (Revaluation)', amount:c.fxRevaluation});
+  else if(c.fxRevaluation<-0.004) dr.push({label:'Unrealized FX Loss (Revaluation)', amount:-c.fxRevaluation});
   if(c.totalSales>0.004) cr.push({label:'Sales Revenue', amount:c.totalSales});
   Object.keys(pl.incomeByCategory).forEach(function(k){ if(pl.incomeByCategory[k]>0.004) cr.push({label:k, amount:pl.incomeByCategory[k]}); });
   const totalDr = dr.reduce(function(s,r){ return s+r.amount; },0);
@@ -2254,8 +2261,10 @@ function balanceSheetHtml(){
         '<div class="ledger-row"><span class="name">Capital Contributed</span><span class="amt">'+fmtNPR(bs.capitalIn)+'</span></div>'+
         '<div class="ledger-row"><span class="name">Less: Drawings</span><span class="amt">-'+fmtNPR(bs.drawings)+'</span></div>'+
         '<div class="ledger-row"><span class="name">Net Profit (Retained)</span><span class="amt">'+fmtNPR(bs.netProfit)+'</span></div>'+
+        '<div class="ledger-row"><span class="name">Unrealized FX Gain/Loss <span class="text-dim" style="font-size:10.5px">(revaluation)</span></span><span class="amt '+(bs.fxRevaluation>=0?'text-green':'text-red')+'">'+fmtNPR(bs.fxRevaluation)+'</span></div>'+
         '<div class="ledger-total"><span>Total Equity</span><span class="amt">'+fmtNPR(bs.totalEquity)+'</span></div>'+
-        '<div class="ledger-grand"><span>Total Liabilities + Equity</span><span class="amt">'+fmtNPR(bs.totalLiabPlusEquity)+'</span></div></div>'+
+        '<div class="ledger-grand"><span>Total Liabilities + Equity</span><span class="amt">'+fmtNPR(bs.totalLiabPlusEquity)+'</span></div>'+
+        '<p class="hint" style="margin-top:10px">Unrealized FX Gain/Loss reflects the change in value of your foreign-currency and platform-credit holdings since they were acquired, based on today\'s rates. It does not change your realized Net Profit above — that stays locked to the rate at the time of each transaction.</p></div>'+
     '</div>';
 }
 function exportBalanceSheetCSV(){
@@ -2269,6 +2278,7 @@ function exportBalanceSheetCSV(){
   rows.push(['Equity','Capital Contributed',bs.capitalIn.toFixed(2)]);
   rows.push(['Equity','Drawings',(-bs.drawings).toFixed(2)]);
   rows.push(['Equity','Net Profit (Retained)',bs.netProfit.toFixed(2)]);
+  rows.push(['Equity','Unrealized FX Gain/Loss (Revaluation)',bs.fxRevaluation.toFixed(2)]);
   rows.push(['Equity','TOTAL EQUITY',bs.totalEquity.toFixed(2)]);
   rows.push(['','TOTAL LIABILITIES + EQUITY',bs.totalLiabPlusEquity.toFixed(2)]);
   downloadCSV(rows,'balance-sheet.csv');
