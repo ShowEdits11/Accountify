@@ -659,6 +659,11 @@ function closeModal(){
    ============================================================ */
 function getAccount(id){ return state.accounts.find(function(a){ return a.id===id; }) || null; }
 function activeAccounts(){ return state.accounts.filter(function(a){ return !a.archived; }); }
+// Resolves the rate that should be used to value a HISTORICAL transaction: the rate frozen
+// on the record at the moment it was created, falling back to the account's current rate only
+// for legacy records saved before rate-snapshotting existed. Never use a live account rate for
+// anything that has already happened - only for current/"as of today" valuation.
+function snapOr(recordRate, acc){ return (recordRate!=null && recordRate>0) ? recordRate : (acc?acc.rate:1); }
 
 function accountBalanceNative(accountId){
   const acc = getAccount(accountId);
@@ -674,7 +679,8 @@ function accountBalanceNative(accountId){
   });
   state.credits.forEach(function(c){
     if(c.accountId===accountId){
-      const nativeMoved = (Number(c.amount)||0) / (acc.rate||1);
+      const rate = snapOr(c.accountRateSnap, acc);
+      const nativeMoved = (c.accountNative!=null) ? c.accountNative : (Number(c.amount)||0) / (rate||1);
       bal += (c.type==='taken' ? nativeMoved : -nativeMoved);
     }
   });
@@ -703,18 +709,70 @@ function accountBalanceNPR(accountId){
   if(!acc) return 0;
   return accountBalanceNative(accountId) * acc.rate;
 }
+// Historical-cost value of everything that ever moved through this account, each event valued at
+// ITS OWN frozen snapshot rate (not today's rate). This is the "what did we actually record at the
+// time" view. The gap between this and the current mark-to-market value (accountBalanceNPR, which
+// uses today's live rate) is the account's unrealized FX gain/loss - a real, meaningful figure, not
+// an error. This is what keeps the Balance Sheet balancing while P&L stays permanently locked.
+function accountHistoricalCostNPR(accountId){
+  const acc = getAccount(accountId);
+  if(!acc) return 0;
+  let cost = (Number(acc.balance)||0) * (acc.openingRateSnapshot!=null ? acc.openingRateSnapshot : acc.rate);
+  state.sales.forEach(function(s){
+    if(s.accountId===accountId) cost += (Number(s.receivedNative)||0) * snapOr(s.accountRateSnap, acc);
+    if(s.payAccountId===accountId) cost -= (Number(s.payNative)||0) * snapOr(s.payAccountRateSnap, acc);
+  });
+  state.purchases.forEach(function(p){
+    if(p.accountId===accountId) cost -= (Number(p.paidNative)||0) * snapOr(p.accountRateSnap, acc);
+    if(p.receiveAccountId===accountId) cost += (Number(p.receiveNative)||0) * snapOr(p.receiveAccountRateSnap, acc);
+  });
+  state.credits.forEach(function(c){
+    if(c.accountId===accountId){
+      const rate = snapOr(c.accountRateSnap, acc);
+      const native = (c.accountNative!=null) ? c.accountNative : (Number(c.amount)||0)/(rate||1);
+      cost += (c.type==='taken' ? native : -native) * rate;
+    }
+  });
+  state.cashTx.forEach(function(t){
+    if(t.accountId!==accountId) return;
+    const rate = snapOr(t.rateSnap, acc);
+    if(t.kind==='in') cost += (Number(t.amount)||0)*rate;
+    if(t.kind==='out') cost -= (Number(t.amount)||0)*rate;
+  });
+  state.transfers.forEach(function(t){
+    if(t.fromAccountId===accountId) cost -= (Number(t.fromAmount)||0) * snapOr(t.fromRateSnap, acc);
+    if(t.toAccountId===accountId) cost += (Number(t.toAmount)||0) * snapOr(t.toRateSnap, acc);
+  });
+  state.settlements.forEach(function(st){
+    if(st.accountId!==accountId) return;
+    const rate = snapOr(st.rateSnap, acc);
+    if(st.refType==='sale') cost += (Number(st.amountNative)||0)*rate;
+    if(st.refType==='purchase') cost -= (Number(st.amountNative)||0)*rate;
+    if(st.refType==='credit'){
+      const c = state.credits.find(function(x){ return x.id===st.refId; });
+      if(c) cost += (c.type==='given' ? (Number(st.amountNative)||0) : -(Number(st.amountNative)||0)) * rate;
+    }
+  });
+  return cost;
+}
+function fxRevaluationForAccount(accountId){
+  return accountBalanceNPR(accountId) - accountHistoricalCostNPR(accountId);
+}
+function totalFXRevaluation(){
+  return state.accounts.reduce(function(s,a){ return s + fxRevaluationForAccount(a.id); }, 0);
+}
 function settledNPRFor(refType, refId){
   return state.settlements.filter(function(s){ return s.refType===refType && s.refId===refId; })
-    .reduce(function(sum,s){ const acc=getAccount(s.accountId); return sum + (Number(s.amountNative)||0)*(acc?acc.rate:1); },0);
+    .reduce(function(sum,s){ const acc=getAccount(s.accountId); return sum + (Number(s.amountNative)||0)*snapOr(s.rateSnap, acc); },0);
 }
 function saleDue(sale){
   const acc = sale.accountId ? getAccount(sale.accountId) : null;
-  const receivedNPR = (Number(sale.receivedNative)||0) * (acc?acc.rate:1);
+  const receivedNPR = (Number(sale.receivedNative)||0) * snapOr(sale.accountRateSnap, acc);
   return (Number(sale.amount)||0) - receivedNPR - settledNPRFor('sale', sale.id);
 }
 function purchaseDue(purchase){
   const acc = purchase.accountId ? getAccount(purchase.accountId) : null;
-  const paidNPR = (Number(purchase.paidNative)||0) * (acc?acc.rate:1);
+  const paidNPR = (Number(purchase.paidNative)||0) * snapOr(purchase.accountRateSnap, acc);
   return (Number(purchase.amount)||0) - paidNPR - settledNPRFor('purchase', purchase.id);
 }
 function creditDue(credit){
@@ -724,42 +782,44 @@ function saleStatus(sale){
   const due = saleDue(sale);
   if(due <= 0.004) return 'paid';
   const acc = sale.accountId ? getAccount(sale.accountId) : null;
-  const receivedNPR = (Number(sale.receivedNative)||0)*(acc?acc.rate:1) + settledNPRFor('sale',sale.id);
+  const receivedNPR = (Number(sale.receivedNative)||0)*snapOr(sale.accountRateSnap, acc) + settledNPRFor('sale',sale.id);
   return receivedNPR > 0.004 ? 'partial' : 'credit';
 }
 function purchaseStatus(purchase){
   const due = purchaseDue(purchase);
   if(due <= 0.004) return 'paid';
   const acc = purchase.accountId ? getAccount(purchase.accountId) : null;
-  const paidNPR = (Number(purchase.paidNative)||0)*(acc?acc.rate:1) + settledNPRFor('purchase',purchase.id);
+  const paidNPR = (Number(purchase.paidNative)||0)*snapOr(purchase.accountRateSnap, acc) + settledNPRFor('purchase',purchase.id);
   return paidNPR > 0.004 ? 'partial' : 'credit';
 }
 function isCapitalIn(t){ return t.kind==='in' && t.category==='Capital Investment'; }
 function isDrawingsOut(t){ return t.kind==='out' && t.category==='Drawings (Capital Withdrawal)'; }
-function cashTxNPR(t){ const acc=getAccount(t.accountId); return (Number(t.amount)||0)*(acc?acc.rate:1); }
+function cashTxNPR(t){ const acc=getAccount(t.accountId); return (Number(t.amount)||0)*snapOr(t.rateSnap, acc); }
 function transferFeeNPR(t){
   const fromAcc=getAccount(t.fromAccountId), toAcc=getAccount(t.toAccountId);
-  if(!fromAcc||!toAcc) return 0;
-  const sentNPR = (Number(t.fromAmount)||0)*fromAcc.rate;
-  const recvNPR = (Number(t.toAmount)||0)*toAcc.rate;
+  if(!fromAcc&&!toAcc&&t.fromRateSnap==null&&t.toRateSnap==null) return 0;
+  const sentNPR = (Number(t.fromAmount)||0)*snapOr(t.fromRateSnap, fromAcc);
+  const recvNPR = (Number(t.toAmount)||0)*snapOr(t.toRateSnap, toAcc);
   return sentNPR - recvNPR;
 }
 function saleCogsNPR(s){
   // Cost of fulfilling a sale by drawing down a stock/platform-credit account, e.g. Unipin UC.
+  // Uses the rate frozen at the time of the sale - never the account's current rate.
   if(!s.payAccountId) return 0;
   const acc = getAccount(s.payAccountId);
-  if(!acc) return 0;
-  return (Number(s.payNative)||0) * acc.rate;
+  if(!acc && s.payAccountRateSnap==null) return 0;
+  return (Number(s.payNative)||0) * snapOr(s.payAccountRateSnap, acc);
 }
 function purchaseIsAssetExchange(p){ return !!p.receiveAccountId; }
 function purchaseExchangeSpreadNPR(p){
   // For a purchase that receives value into another account (e.g. buying USDT), this is an
   // asset-for-asset exchange, not an expense. Positive = paid more than the received asset is
   // worth (booked as a fee/loss); negative = received more (booked as a gain). Same idea as transferFeeNPR.
+  // Uses the rate frozen at the time of the purchase - never the account's current rate.
   if(!p.receiveAccountId) return 0;
   const receiveAcc = getAccount(p.receiveAccountId);
-  if(!receiveAcc) return 0;
-  const receiveNPR = (Number(p.receiveNative)||0) * receiveAcc.rate;
+  if(!receiveAcc && p.receiveAccountRateSnap==null) return 0;
+  const receiveNPR = (Number(p.receiveNative)||0) * snapOr(p.receiveAccountRateSnap, receiveAcc);
   return (Number(p.amount)||0) - receiveNPR;
 }
 
@@ -947,15 +1007,21 @@ function downloadCSV(rows, filename){
    ============================================================ */
 function getAccountOr(id){ return getAccount(id); }
 function addAccount(d){
+  const rate = d.currency===baseCurrency()?1:(Number(d.rate)||0);
   const acc = { id:uid('acc'), type:d.type, name:d.name.trim(), number:(d.number||'').trim(),
-    currency:d.currency, rate: d.currency===baseCurrency()?1:(Number(d.rate)||0), balance:Number(d.balance)||0,
+    currency:d.currency, rate: rate, balance:Number(d.balance)||0, openingRateSnapshot: rate,
     archived:false, createdAt:nowISOTime() };
   state.accounts.push(acc); saveState(); return acc;
 }
 function updateAccount(id,d){
   const acc = getAccount(id); if(!acc) return;
+  const newBalance = Number(d.balance)||0;
+  const balanceOrCurrencyChanged = (newBalance !== Number(acc.balance)) || (d.currency !== acc.currency);
   acc.name=d.name.trim(); acc.number=(d.number||'').trim(); acc.currency=d.currency;
-  acc.rate = d.currency===baseCurrency()?1:(Number(d.rate)||0); acc.balance=Number(d.balance)||0;
+  acc.rate = d.currency===baseCurrency()?1:(Number(d.rate)||0); acc.balance=newBalance;
+  // Only re-snapshot the opening-balance rate when the balance/currency itself changed (e.g. a correction).
+  // Changing ONLY the live rate must never touch this, or it would retroactively shift historical equity.
+  if(balanceOrCurrencyChanged) acc.openingRateSnapshot = acc.rate;
   saveState();
 }
 function accountHasHistory(id){
@@ -982,26 +1048,38 @@ function partyDatalistHtml(id, kind){
   return '<datalist id="'+id+'">'+names.map(function(n){ return '<option value="'+escapeHtml(n)+'"></option>'; }).join('')+'</datalist>';
 }
 function addSale(d){
+  const acc = d.accountId ? getAccount(d.accountId) : null;
+  const payAcc = d.payAccountId ? getAccount(d.payAccountId) : null;
   const rec = { id:uid('sale'), date:d.date, customer:d.customer.trim(), description:(d.description||'').trim(),
     amount:Number(d.amount)||0, receivedNative:Number(d.receivedNative)||0, accountId:d.accountId||null,
+    accountRateSnap: acc ? acc.rate : null,
     payAccountId:d.payAccountId||null, payNative:Number(d.payNative)||0,
+    payAccountRateSnap: payAcc ? payAcc.rate : null,
     dueDate:d.dueDate||'', notes:(d.notes||'').trim(), createdAt:nowISOTime() };
   state.sales.push(rec); saveState();
   rememberParty('customers', rec.customer);
   return rec;
 }
 function addPurchase(d){
+  const acc = d.accountId ? getAccount(d.accountId) : null;
+  const recvAcc = d.receiveAccountId ? getAccount(d.receiveAccountId) : null;
   const rec = { id:uid('pur'), date:d.date, supplier:d.supplier.trim(), description:(d.description||'').trim(),
     amount:Number(d.amount)||0, paidNative:Number(d.paidNative)||0, accountId:d.accountId||null,
+    accountRateSnap: acc ? acc.rate : null,
     receiveAccountId:d.receiveAccountId||null, receiveNative:Number(d.receiveNative)||0,
+    receiveAccountRateSnap: recvAcc ? recvAcc.rate : null,
     dueDate:d.dueDate||'', notes:(d.notes||'').trim(), createdAt:nowISOTime() };
   state.purchases.push(rec); saveState();
   rememberParty('suppliers', rec.supplier);
   return rec;
 }
 function addCredit(d){
+  const acc = d.accountId ? getAccount(d.accountId) : null;
+  const rate = acc ? (acc.rate||1) : 1;
   const rec = { id:uid('cred'), type:d.type, party:d.party.trim(), amount:Number(d.amount)||0,
-    accountId:d.accountId||null, date:d.date, dueDate:d.dueDate||'', notes:(d.notes||'').trim(), createdAt:nowISOTime() };
+    accountId:d.accountId||null, accountRateSnap: acc ? rate : null,
+    accountNative: acc ? (Number(d.amount)||0) / rate : null,
+    date:d.date, dueDate:d.dueDate||'', notes:(d.notes||'').trim(), createdAt:nowISOTime() };
   state.credits.push(rec); saveState(); return rec;
 }
 function rememberCategory(kind, cat){
@@ -1013,18 +1091,23 @@ function rememberCategory(kind, cat){
   saveState();
 }
 function addCashTx(d){
+  const acc = getAccount(d.accountId);
   const rec = { id:uid('ctx'), kind:d.kind, date:d.date, accountId:d.accountId, category:d.category,
-    amount:Number(d.amount)||0, note:(d.note||'').trim(), createdAt:nowISOTime() };
+    amount:Number(d.amount)||0, rateSnap: acc?acc.rate:1, note:(d.note||'').trim(), createdAt:nowISOTime() };
   state.cashTx.push(rec); saveState(); rememberCategory(d.kind, d.category); return rec;
 }
 function addTransfer(d){
+  const fromAcc=getAccount(d.fromAccountId), toAcc=getAccount(d.toAccountId);
   const rec = { id:uid('trf'), date:d.date, fromAccountId:d.fromAccountId, toAccountId:d.toAccountId,
-    fromAmount:Number(d.fromAmount)||0, toAmount:Number(d.toAmount)||0, note:(d.note||'').trim(), createdAt:nowISOTime() };
+    fromAmount:Number(d.fromAmount)||0, toAmount:Number(d.toAmount)||0,
+    fromRateSnap: fromAcc?fromAcc.rate:1, toRateSnap: toAcc?toAcc.rate:1,
+    note:(d.note||'').trim(), createdAt:nowISOTime() };
   state.transfers.push(rec); saveState(); return rec;
 }
 function addSettlement(d){
+  const acc = getAccount(d.accountId);
   const rec = { id:uid('stl'), date:d.date, refType:d.refType, refId:d.refId, accountId:d.accountId,
-    amountNative:Number(d.amountNative)||0, note:(d.note||'').trim(), createdAt:nowISOTime() };
+    amountNative:Number(d.amountNative)||0, rateSnap: acc?acc.rate:1, note:(d.note||'').trim(), createdAt:nowISOTime() };
   state.settlements.push(rec); saveState(); return rec;
 }
 function deleteRecord(kind, id){
