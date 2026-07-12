@@ -1010,8 +1010,171 @@ function downloadCSV(rows, filename){
 }
 
 /* ============================================================
-   CRUD
+   MONTHLY AGGREGATION (feeds charts + Profitability Report)
    ============================================================ */
+function monthKey(dateStr){ return dateStr ? dateStr.slice(0,7) : ''; }
+function monthLabel(key){
+  const parts = key.split('-'); const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const mi = Number(parts[1])-1;
+  return (months[mi]||'?')+' '+(parts[0]||'').slice(2);
+}
+function lastNMonthKeys(n){
+  const keys = []; const now = new Date();
+  for(let i=n-1;i>=0;i--){
+    const dt = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    keys.push(dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0'));
+  }
+  return keys;
+}
+function monthlySalesPurchases(n){
+  const keys = lastNMonthKeys(n||6);
+  const sByM={}, pByM={}; keys.forEach(function(k){ sByM[k]=0; pByM[k]=0; });
+  state.sales.forEach(function(s){ const k=monthKey(s.date); if(sByM[k]!=null) sByM[k]+=Number(s.amount)||0; });
+  state.purchases.forEach(function(p){ const k=monthKey(p.date); if(pByM[k]!=null) pByM[k]+=Number(p.amount)||0; });
+  return keys.map(function(k){ return {label:monthLabel(k), value:sByM[k], value2:pByM[k]}; });
+}
+function monthlyProfit(n){
+  const keys = lastNMonthKeys(n||6);
+  return keys.map(function(k){ const pl=calcProfitLoss(k+'-01', k+'-31'); return {label:monthLabel(k), value: pl.totalRevenue-pl.totalExpense}; });
+}
+function monthlyCashFlow(n){
+  const keys = lastNMonthKeys(n||6);
+  return keys.map(function(k){ const mf=moneyFlowTotals(k+'-01', k+'-31'); return {label:monthLabel(k), value: mf.totalIn, value2: mf.totalOut}; });
+}
+function topSuppliers(n){
+  const byS = {};
+  state.purchases.forEach(function(p){ byS[p.supplier] = (byS[p.supplier]||0) + (Number(p.amount)||0); });
+  return Object.keys(byS).map(function(k){ return {label:k, value:byS[k]}; })
+    .sort(function(a,b){ return b.value-a.value; }).slice(0, n||6);
+}
+
+/* ============================================================
+   CHARTS (dependency-free inline SVG, theme-aware via CSS vars)
+   ============================================================ */
+function fmtCompact(n){
+  n = Number(n)||0;
+  const neg = n<0; const abs = Math.abs(n);
+  let s;
+  if(abs>=1000000) s=(abs/1000000).toFixed(abs>=10000000?0:1)+'M';
+  else if(abs>=1000) s=(abs/1000).toFixed(abs>=10000?0:1)+'K';
+  else s=abs.toFixed(abs>=100?0:(abs>=10?1:2));
+  return (neg?'-':'')+s;
+}
+function escapeAttr(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+function chartEmpty(w,h,msg){
+  return '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%; height:'+h+'px"><text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" fill="var(--text-faint)" font-size="12">'+escapeAttr(msg||'Not enough data yet')+'</text></svg>';
+}
+function svgBarChart(data, opts){
+  opts = opts || {};
+  const w = opts.width || 640, h = opts.height || 220;
+  const padL = 44, padR = 10, padT = 16, padB = 30;
+  const plotW = w-padL-padR, plotH = h-padT-padB;
+  if(!data || !data.length) return chartEmpty(w,h,opts.emptyMsg);
+  const hasSecond = data.some(function(d){ return d.value2!=null; });
+  let maxV=0, minV=0;
+  data.forEach(function(d){ maxV=Math.max(maxV,d.value||0,d.value2||0); minV=Math.min(minV,d.value||0,d.value2||0); });
+  if(maxV===0 && minV===0) maxV=1;
+  const range=(maxV-minV)||1;
+  const zeroY = padT + plotH*(maxV/range);
+  const n=data.length, groupW=plotW/n;
+  const barW = hasSecond ? groupW*0.30 : Math.min(groupW*0.5, 40);
+  let grid='', bars='';
+  const steps=4;
+  for(let i=0;i<=steps;i++){
+    const v = minV+(range*i/steps);
+    const y = padT+plotH-(plotH*(v-minV)/range);
+    grid += '<line x1="'+padL+'" y1="'+y.toFixed(1)+'" x2="'+(w-padR)+'" y2="'+y.toFixed(1)+'" stroke="var(--border-soft)" stroke-width="1"/>';
+    grid += '<text x="'+(padL-7)+'" y="'+(y+3).toFixed(1)+'" text-anchor="end" font-size="9.5" fill="var(--text-faint)">'+fmtCompact(v)+'</text>';
+  }
+  data.forEach(function(d,i){
+    const cx = padL+groupW*i+groupW/2;
+    const v1=d.value||0, bh1=plotH*Math.abs(v1)/range, y1=v1>=0?zeroY-bh1:zeroY;
+    const x1 = hasSecond ? cx-barW-2 : cx-barW/2;
+    bars += '<rect x="'+x1.toFixed(1)+'" y="'+y1.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(bh1,0.6).toFixed(1)+'" rx="2" fill="'+(opts.color||'var(--accent)')+'"><title>'+escapeAttr(d.label)+': '+fmtCompact(v1)+'</title></rect>';
+    if(hasSecond){
+      const v2=d.value2||0, bh2=plotH*Math.abs(v2)/range, y2=v2>=0?zeroY-bh2:zeroY;
+      const x2=cx+2;
+      bars += '<rect x="'+x2.toFixed(1)+'" y="'+y2.toFixed(1)+'" width="'+barW.toFixed(1)+'" height="'+Math.max(bh2,0.6).toFixed(1)+'" rx="2" fill="'+(opts.color2||'var(--blue)')+'"><title>'+escapeAttr(d.label)+': '+fmtCompact(v2)+'</title></rect>';
+    }
+    bars += '<text x="'+cx.toFixed(1)+'" y="'+(h-10)+'" text-anchor="middle" font-size="9.5" fill="var(--text-faint)">'+escapeAttr(d.label)+'</text>';
+  });
+  const legend = hasSecond ? ('<div class="chart-legend"><span><i style="background:'+(opts.color||'var(--accent)')+'"></i>'+escapeAttr(opts.label1||'Series 1')+'</span><span><i style="background:'+(opts.color2||'var(--blue)')+'"></i>'+escapeAttr(opts.label2||'Series 2')+'</span></div>') : '';
+  return '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%; height:'+h+'px; overflow:visible">'+grid+
+    '<line x1="'+padL+'" y1="'+zeroY.toFixed(1)+'" x2="'+(w-padR)+'" y2="'+zeroY.toFixed(1)+'" stroke="var(--border)" stroke-width="1"/>'+bars+'</svg>'+legend;
+}
+function svgLineChart(data, opts){
+  opts = opts || {};
+  const w = opts.width || 640, h = opts.height || 220;
+  const padL = 44, padR = 10, padT = 16, padB = 30;
+  const plotW = w-padL-padR, plotH = h-padT-padB;
+  if(!data || !data.length) return chartEmpty(w,h,opts.emptyMsg);
+  let maxV=0, minV=0;
+  data.forEach(function(d){ maxV=Math.max(maxV,d.value||0); minV=Math.min(minV,d.value||0); });
+  if(maxV===0 && minV===0) maxV=1;
+  const range=(maxV-minV)||1;
+  const zeroY = padT+plotH*(maxV/range);
+  const n=data.length;
+  const stepX = n>1 ? plotW/(n-1) : 0;
+  let grid='';
+  const steps=4;
+  for(let i=0;i<=steps;i++){
+    const v=minV+(range*i/steps);
+    const y=padT+plotH-(plotH*(v-minV)/range);
+    grid += '<line x1="'+padL+'" y1="'+y.toFixed(1)+'" x2="'+(w-padR)+'" y2="'+y.toFixed(1)+'" stroke="var(--border-soft)" stroke-width="1"/>';
+    grid += '<text x="'+(padL-7)+'" y="'+(y+3).toFixed(1)+'" text-anchor="end" font-size="9.5" fill="var(--text-faint)">'+fmtCompact(v)+'</text>';
+  }
+  const pts = data.map(function(d,i){
+    const x = n>1 ? padL+stepX*i : padL+plotW/2;
+    const y = padT+plotH-(plotH*((d.value||0)-minV)/range);
+    return {x:x,y:y,d:d};
+  });
+  const linePath = pts.map(function(p,i){ return (i===0?'M':'L')+p.x.toFixed(1)+' '+p.y.toFixed(1); }).join(' ');
+  const areaPath = linePath+' L'+pts[pts.length-1].x.toFixed(1)+' '+zeroY.toFixed(1)+' L'+pts[0].x.toFixed(1)+' '+zeroY.toFixed(1)+' Z';
+  let dots='', labels='';
+  pts.forEach(function(p){
+    dots += '<circle cx="'+p.x.toFixed(1)+'" cy="'+p.y.toFixed(1)+'" r="3" fill="'+(opts.color||'var(--accent)')+'"><title>'+escapeAttr(p.d.label)+': '+fmtCompact(p.d.value)+'</title></circle>';
+    labels += '<text x="'+p.x.toFixed(1)+'" y="'+(h-10)+'" text-anchor="middle" font-size="9.5" fill="var(--text-faint)">'+escapeAttr(p.d.label)+'</text>';
+  });
+  return '<svg viewBox="0 0 '+w+' '+h+'" style="width:100%; height:'+h+'px; overflow:visible">'+grid+
+    '<line x1="'+padL+'" y1="'+zeroY.toFixed(1)+'" x2="'+(w-padR)+'" y2="'+zeroY.toFixed(1)+'" stroke="var(--border)" stroke-width="1"/>'+
+    '<path d="'+areaPath+'" fill="'+(opts.color||'var(--accent)')+'" opacity="0.12" stroke="none"/>'+
+    '<path d="'+linePath+'" fill="none" stroke="'+(opts.color||'var(--accent)')+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'+
+    dots+labels+'</svg>';
+}
+function svgDonutChart(data, opts){
+  opts = opts || {};
+  const size = opts.size || 200;
+  const cx=size/2, cy=size/2, rOuter=size*0.42, rInner=size*0.27;
+  const palette = opts.palette || ['var(--accent)','var(--blue)','var(--green)','var(--teal)','var(--gold)','var(--red)'];
+  const filtered = (data||[]).filter(function(d){ return (d.value||0)>0.0001; });
+  if(!filtered.length) return chartEmpty(size,size,opts.emptyMsg);
+  const total = filtered.reduce(function(s,d){ return s+d.value; },0);
+  let angle = -Math.PI/2, arcs='';
+  filtered.forEach(function(d,i){
+    const frac = d.value/total;
+    const a0=angle, a1=angle+frac*Math.PI*2;
+    angle=a1;
+    const x0o=cx+rOuter*Math.cos(a0), y0o=cy+rOuter*Math.sin(a0);
+    const x1o=cx+rOuter*Math.cos(a1), y1o=cy+rOuter*Math.sin(a1);
+    const x0i=cx+rInner*Math.cos(a1), y0i=cy+rInner*Math.sin(a1);
+    const x1i=cx+rInner*Math.cos(a0), y1i=cy+rInner*Math.sin(a0);
+    const big = (a1-a0) > Math.PI ? 1 : 0;
+    const path = frac>=0.9995
+      ? 'M '+cx+' '+(cy-rOuter)+' A '+rOuter+' '+rOuter+' 0 1 1 '+(cx-0.01)+' '+(cy-rOuter)+' L '+(cx-0.01)+' '+(cy-rInner)+' A '+rInner+' '+rInner+' 0 1 0 '+cx+' '+(cy-rInner)+' Z'
+      : 'M '+x0o.toFixed(2)+' '+y0o.toFixed(2)+' A '+rOuter+' '+rOuter+' 0 '+big+' 1 '+x1o.toFixed(2)+' '+y1o.toFixed(2)+' L '+x0i.toFixed(2)+' '+y0i.toFixed(2)+' A '+rInner+' '+rInner+' 0 '+big+' 0 '+x1i.toFixed(2)+' '+y1i.toFixed(2)+' Z';
+    arcs += '<path d="'+path+'" fill="'+palette[i%palette.length]+'"><title>'+escapeAttr(d.label)+': '+fmtCompact(d.value)+' ('+(frac*100).toFixed(1)+'%)</title></path>';
+  });
+  const legend = '<div class="chart-legend chart-legend-col">'+filtered.map(function(d,i){
+    const frac = d.value/total;
+    return '<span><i style="background:'+palette[i%palette.length]+'"></i>'+escapeAttr(d.label)+' <b class="mono">'+(frac*100).toFixed(0)+'%</b></span>';
+  }).join('')+'</div>';
+  return '<div style="display:flex; align-items:center; gap:18px; flex-wrap:wrap"><svg viewBox="0 0 '+size+' '+size+'" style="width:'+size+'px; height:'+size+'px; flex-shrink:0">'+arcs+'</svg>'+legend+'</div>';
+}
+function chartCard(title, innerHtml, subtitle){
+  return '<div class="card chart-card"><div class="section-head"><h2>'+escapeHtml(title)+'</h2>'+(subtitle?('<p>'+escapeHtml(subtitle)+'</p>'):'')+'</div><div class="chart-body">'+innerHtml+'</div></div>';
+}
+
+
 function getAccountOr(id){ return getAccount(id); }
 function addAccount(d){
   const rate = d.currency===baseCurrency()?1:(Number(d.rate)||0);
@@ -2425,14 +2588,28 @@ function onBaseCurrencyPick(){
   preview.textContent = 'e.g. an entry of '+fmtNative(sampleOld,current)+' becomes '+fmtNative(sampleNew,newBase)+'. This will apply to '+n+' entries and '+accN+' account rate(s).';
 }
 function migrateBaseCurrency(newBase, referenceRate){
-  // referenceRate: 1 newBase = referenceRate (old base) units
+  // referenceRate: 1 newBase = referenceRate (old base) units.
+  // Every amount already denominated in the base currency gets re-expressed in the new one.
   state.sales.forEach(function(s){ s.amount = s.amount / referenceRate; });
   state.purchases.forEach(function(p){ p.amount = p.amount / referenceRate; });
   state.credits.forEach(function(c){ c.amount = c.amount / referenceRate; });
   state.accounts.forEach(function(a){
     if(a.currency===newBase){ a.rate = 1; }
     else { a.rate = (a.rate||1) / referenceRate; }
+    if(a.openingRateSnapshot!=null) a.openingRateSnapshot = (a.currency===newBase) ? 1 : (a.openingRateSnapshot / referenceRate);
   });
+  // Every FROZEN rate snapshot was recorded in terms of the OLD base currency and must be
+  // re-expressed in the new one too - otherwise historical COGS/P&L would silently mix currencies
+  // (e.g. a frozen "165" meaning "165 NPR" would get misread as "165 USD" after switching to USD).
+  // The native amounts themselves (receivedNative, payNative, fromAmount, etc.) are real physical
+  // quantities and are never touched.
+  function migRate(v){ return (v==null) ? v : v/referenceRate; }
+  state.sales.forEach(function(s){ s.accountRateSnap = migRate(s.accountRateSnap); s.payAccountRateSnap = migRate(s.payAccountRateSnap); });
+  state.purchases.forEach(function(p){ p.accountRateSnap = migRate(p.accountRateSnap); p.receiveAccountRateSnap = migRate(p.receiveAccountRateSnap); });
+  state.credits.forEach(function(c){ c.accountRateSnap = migRate(c.accountRateSnap); });
+  state.cashTx.forEach(function(t){ t.rateSnap = migRate(t.rateSnap); });
+  state.transfers.forEach(function(t){ t.fromRateSnap = migRate(t.fromRateSnap); t.toRateSnap = migRate(t.toRateSnap); });
+  state.settlements.forEach(function(s){ s.rateSnap = migRate(s.rateSnap); });
   state.meta.baseCurrency = newBase;
   saveState();
 }
