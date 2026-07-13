@@ -182,6 +182,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 
 .content{
   flex:1; padding:24px; max-width:1400px; width:100%; margin:0 auto;
+
   background-attachment:local;
 }
 [data-theme="light"] .content{background-image:none;}
@@ -400,6 +401,17 @@ tfoot td{padding:12px 14px; font-weight:700; background:var(--surface-2); border
 .bar-track{height:9px; border-radius:5px; background:var(--surface-3); overflow:hidden;}
 .bar-fill{height:100%; border-radius:5px; transition:width .5s ease;}
 
+/* Charts (hand-rolled SVG - no external chart library, works fully offline) */
+.chart-card .chart-body{margin-top:2px;}
+.chart-card svg{display:block;}
+.chart-card svg rect,.chart-card svg path,.chart-card svg circle,.chart-card svg line{transition:opacity .15s ease;}
+.chart-card svg rect:hover,.chart-card svg path:hover{opacity:.82; cursor:default;}
+.chart-legend{display:flex; flex-wrap:wrap; gap:14px; margin-top:10px; padding-top:2px;}
+.chart-legend-col{flex-direction:column; gap:8px; justify-content:center;}
+.chart-legend span{display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--text-dim); font-weight:600; white-space:nowrap;}
+.chart-legend span i{width:9px; height:9px; border-radius:3px; display:inline-block; flex-shrink:0;}
+.chart-legend span b{color:var(--text); font-weight:700; margin-left:2px;}
+
 .divider{height:1px; background:var(--border-soft); margin:18px 0;}
 .help-box{background:var(--accent-soft); border:1px solid var(--accent-border); border-radius:var(--radius); padding:12px 14px; font-size:12.5px; color:var(--text-dim); margin-bottom:16px; display:flex; gap:10px;}
 .help-box svg{width:16px; height:16px; color:var(--accent); flex-shrink:0; margin-top:1px;}
@@ -486,6 +498,7 @@ tfoot td{padding:12px 14px; font-weight:700; background:var(--surface-2); border
       <section class="page" id="page-moneyflow-report"></section>
       <section class="page" id="page-due-report"></section>
       <section class="page" id="page-account-reports"></section>
+      <section class="page" id="page-profitability"></section>
       <section class="page" id="page-settings"></section>
     </div>
   </div>
@@ -556,6 +569,7 @@ const ICONS = {
   download: '<path d="M12 15V3M12 15l-4-4M12 15l4-4M4 21h16"/>',
   upload: '<path d="M12 3v12M12 3l-4 4M12 3l4 4M4 21h16"/>',
   empty: '<path d="M3 7l2-3h14l2 3"/><path d="M3 7v12a1 1 0 001 1h16a1 1 0 001-1V7"/><path d="M3 7h18"/><path d="M9 12a3 3 0 006 0"/>',
+  target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5.2"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
 };
 function icon(name){ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[name]||'')+'</svg>'; }
 
@@ -1564,6 +1578,7 @@ const NAV = [
     {id:'moneyflow-report', label:'Money Flow', icon:'activity'},
     {id:'due-report', label:'Due Report', icon:'clock'},
     {id:'account-reports', label:'Account Reports', icon:'book'},
+    {id:'profitability', label:'Profitability', icon:'target'},
   ]},
   {items:[
     {id:'settings', label:'Settings', icon:'gear'},
@@ -1579,6 +1594,7 @@ const PAGE_META = {
   'moneyflow-report':['Money Flow Report','Where your money came from and went'],
   'due-report':['Due Report','Outstanding receivables and payables'],
   'account-reports':['Account Reports','Trial balance, profit & loss, balance sheet'],
+  'profitability':['Profitability','Margins, trends and what is actually earning'],
   'settings':['Settings','Business, currency, backup and data'],
 };
 let currentPage = 'dashboard';
@@ -1614,7 +1630,7 @@ function navigateTo(pageId){
   const renderMap = { 'dashboard':renderDashboard,'accounts':renderAccounts,'newentry':renderNewEntry,
     'cashtx':renderCashTx,'sales-report':renderSalesReport,'purchase-report':renderPurchaseReport,
     'moneyflow-report':renderMoneyFlowReport,'due-report':renderDueReport,'account-reports':renderAccountReports,
-    'settings':renderSettings };
+    'profitability':renderProfitability,'settings':renderSettings };
   const fn = renderMap[pageId];
   if(fn) fn();
   window.scrollTo(0,0);
@@ -1625,6 +1641,47 @@ function applyTheme(){
   document.body.setAttribute('data-theme', state.meta.theme);
   const btn = document.getElementById('themeToggleBtn');
   btn.innerHTML = state.meta.theme==='dark' ? (icon('sun')+'<span>Light mode</span>') : (icon('moon')+'<span>Dark mode</span>');
+}
+
+/* ============================================================
+   PROFITABILITY REPORT
+   ============================================================ */
+function renderProfitability(){
+  const el = document.getElementById('page-profitability');
+  const pl = calcProfitLoss();
+  const c = calcCore();
+  const grossProfit = pl.salesRevenue - pl.purchaseCost - pl.saleCogs;
+  const margin = pl.totalRevenue>0.004 ? (pl.netProfit/pl.totalRevenue*100) : null;
+  const roi = c.capitalIn>0.004 ? (pl.netProfit/c.capitalIn*100) : null;
+  const trend = monthlyProfit(12);
+  const expenseBreakdown = Object.keys(pl.expenseByCategory).map(function(k){ return {label:k, value:pl.expenseByCategory[k]}; });
+  if(pl.purchaseCost>0.004) expenseBreakdown.unshift({label:'Purchases (COGS)', value:pl.purchaseCost});
+  el.innerHTML =
+    printHeaderHtml('Profitability Report')+
+    '<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="downloadReportPDF(\'profitability\')">'+icon('download')+' Download PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
+    '<div class="stat-grid">'+
+      '<div class="stat-card" style="--stat-color:var(--green); --stat-soft:var(--green-soft)">'+
+        '<div class="stat-icon">'+icon('trendUp')+'</div><div class="stat-label">Gross Profit</div>'+
+        '<div class="stat-value '+(grossProfit>=0?'':'text-red')+'">'+fmtNPR(grossProfit)+'</div>'+
+        '<div class="stat-foot">Revenue minus direct cost of goods sold</div></div>'+
+      '<div class="stat-card" style="--stat-color:'+(pl.netProfit>=0?'var(--accent)':'var(--red)')+'; --stat-soft:'+(pl.netProfit>=0?'var(--accent-soft)':'var(--red-soft)')+'">'+
+        '<div class="stat-icon">'+icon('target')+'</div><div class="stat-label">Net Profit</div>'+
+        '<div class="stat-value '+(pl.netProfit>=0?'':'text-red')+'">'+fmtNPR(pl.netProfit)+'</div>'+
+        '<div class="stat-foot">After all operating expenses</div></div>'+
+      '<div class="stat-card" style="--stat-color:var(--blue); --stat-soft:var(--blue-soft)">'+
+        '<div class="stat-icon">'+icon('activity')+'</div><div class="stat-label">Profit Margin</div>'+
+        '<div class="stat-value">'+(margin==null?'—':margin.toFixed(1)+'%')+'</div>'+
+        '<div class="stat-foot">Net profit ÷ total revenue</div></div>'+
+      '<div class="stat-card" style="--stat-color:var(--gold); --stat-soft:var(--gold-soft)">'+
+        '<div class="stat-icon">'+icon('wallet')+'</div><div class="stat-label">ROI</div>'+
+        '<div class="stat-value">'+(roi==null?'—':roi.toFixed(1)+'%')+'</div>'+
+        '<div class="stat-foot">Net profit ÷ capital contributed</div></div>'+
+    '</div>'+
+    '<div class="grid-2">'+
+      chartCard('Profit Trend', svgLineChart(trend, {color: pl.netProfit>=0?'var(--accent)':'var(--red)', emptyMsg:'Record sales and costs to see this trend'}), 'Net profit by month, last 12 months')+
+      chartCard('Cost Breakdown', svgDonutChart(expenseBreakdown, {emptyMsg:'No costs recorded yet'}), 'Where expenses are going')+
+    '</div>'+
+    '<div class="help-box">'+icon('alert')+'<div>All figures here use each transaction\'s locked historical exchange rate, so profit numbers never shift just because you update an account\'s current rate later.</div></div>';
 }
 
 /* ============================================================
@@ -2400,6 +2457,7 @@ function renderPurchaseReport(){
   const el=document.getElementById('page-purchase-report');
   el.innerHTML =
     printHeaderHtml('Purchase Report')+
+    chartCard('Top Suppliers', svgBarChart(topSuppliers(6), {color:'var(--blue)', emptyMsg:'Record a purchase to see this'}), 'By total purchase amount ('+baseCurrency()+')')+
     '<div class="filter-bar">'+
       '<div class="field"><label>From</label><input type="date" id="prFrom"></div>'+
       '<div class="field"><label>To</label><input type="date" id="prTo"></div>'+
@@ -2454,6 +2512,7 @@ function renderMoneyFlowReport(){
   const el=document.getElementById('page-moneyflow-report');
   el.innerHTML=
     printHeaderHtml('Money Flow Report')+
+    chartCard('Cash Flow', svgBarChart(monthlyCashFlow(6), {color:'var(--green)', color2:'var(--red)', label1:'In', label2:'Out', emptyMsg:'Record cash in/out to see this trend'}), 'Money in vs out, last 6 months')+
     '<div class="filter-bar">'+
       '<div class="field"><label>From</label><input type="date" id="mfFrom"></div>'+
       '<div class="field"><label>To</label><input type="date" id="mfTo"></div>'+
@@ -2511,14 +2570,16 @@ function renderDueReport(){
   state.credits.filter(function(c){ return c.type==='taken'; }).forEach(function(c){ const d=creditDue(c); if(d>0.004) payables.push({refType:'credit',refId:c.id,party:c.party,date:c.date,dueDate:c.dueDate,total:c.amount,remaining:d}); });
   const totalRec=receivables.reduce(function(s,r){ return s+r.remaining; },0);
   const totalPay=payables.reduce(function(s,r){ return s+r.remaining; },0);
+  const dueAnalysis = svgDonutChart([{label:'Receivable', value:totalRec},{label:'Payable', value:totalPay}], {palette:['var(--green)','var(--red)'], emptyMsg:'No outstanding dues right now'});
   el.innerHTML =
     printHeaderHtml('Due Report')+
     '<div class="summary-strip">'+
       '<div class="summary-chip"><div class="l">Total Receivable</div><div class="v text-green">'+fmtNPR(totalRec)+'</div></div>'+
       '<div class="summary-chip"><div class="l">Total Payable</div><div class="v text-red">'+fmtNPR(totalPay)+'</div></div>'+
       '<div class="summary-chip"><div class="l">Net Due Position</div><div class="v '+(totalRec-totalPay>=0?'text-green':'text-red')+'">'+fmtNPR(totalRec-totalPay)+'</div></div>'+
-      '<div style="align-self:center" class="btn-group"><button class="btn" onclick="exportDueCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="downloadReportPDF(\'due\')">'+icon('download')+' Download PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
+      '<div style="align-self:center" class="btn-group"><button class="btn" onclick="exportDueCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="downloadReportPDF(\'due\')">'+icon('download')+' Due PDF</button><button class="btn" onclick="downloadReportPDF(\'credit\')">'+icon('download')+' Credit PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
     '</div>'+
+    chartCard('Due Analysis', dueAnalysis, 'Receivable vs payable')+
     '<div class="ledger-section-title">Receivables — money owed to you</div>'+dueTableHtml(receivables,'green')+
     '<div class="ledger-section-title">Payables — money you owe</div>'+dueTableHtml(payables,'red');
 }
@@ -2638,17 +2699,21 @@ function plHtml(){
   const pl=calcProfitLoss();
   const incRows=Object.keys(pl.incomeByCategory).map(function(k){ return '<div class="ledger-row"><span class="name">'+escapeHtml(k)+'</span><span class="amt">'+fmtNPR(pl.incomeByCategory[k])+'</span></div>'; }).join('');
   const expRows=Object.keys(pl.expenseByCategory).map(function(k){ return '<div class="ledger-row"><span class="name">'+escapeHtml(k)+'</span><span class="amt">'+fmtNPR(pl.expenseByCategory[k])+'</span></div>'; }).join('');
+  const incVsExp = svgDonutChart([{label:'Income', value:pl.totalRevenue},{label:'Expense', value:pl.totalExpense}], {palette:['var(--green)','var(--red)'], emptyMsg:'Record a sale or expense to see this'});
   return printHeaderHtml('Profit &amp; Loss Statement')+'<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportPLCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="downloadReportPDF(\'pl\')">'+icon('download')+' Download PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
-    '<div class="card">'+
-      '<div class="ledger-section-title">Revenue</div>'+
-      '<div class="ledger-row"><span class="name">Sales Revenue</span><span class="amt">'+fmtNPR(pl.salesRevenue)+'</span></div>'+
-      incRows+
-      '<div class="ledger-total"><span>Total Revenue</span><span class="amt">'+fmtNPR(pl.totalRevenue)+'</span></div>'+
-      '<div class="ledger-section-title">Expenses</div>'+
-      '<div class="ledger-row"><span class="name">Purchases (Cost of Goods)</span><span class="amt">'+fmtNPR(pl.purchaseCost)+'</span></div>'+
-      expRows+
-      '<div class="ledger-total"><span>Total Expenses</span><span class="amt">'+fmtNPR(pl.totalExpense)+'</span></div>'+
-      '<div class="ledger-grand"><span>Net '+(pl.netProfit>=0?'Profit':'Loss')+'</span><span class="amt '+(pl.netProfit>=0?'text-green':'text-red')+'">'+fmtNPR(Math.abs(pl.netProfit))+'</span></div>'+
+    '<div class="grid-2">'+
+      '<div class="card">'+
+        '<div class="ledger-section-title">Revenue</div>'+
+        '<div class="ledger-row"><span class="name">Sales Revenue</span><span class="amt">'+fmtNPR(pl.salesRevenue)+'</span></div>'+
+        incRows+
+        '<div class="ledger-total"><span>Total Revenue</span><span class="amt">'+fmtNPR(pl.totalRevenue)+'</span></div>'+
+        '<div class="ledger-section-title">Expenses</div>'+
+        '<div class="ledger-row"><span class="name">Purchases (Cost of Goods)</span><span class="amt">'+fmtNPR(pl.purchaseCost)+'</span></div>'+
+        expRows+
+        '<div class="ledger-total"><span>Total Expenses</span><span class="amt">'+fmtNPR(pl.totalExpense)+'</span></div>'+
+        '<div class="ledger-grand"><span>Net '+(pl.netProfit>=0?'Profit':'Loss')+'</span><span class="amt '+(pl.netProfit>=0?'text-green':'text-red')+'">'+fmtNPR(Math.abs(pl.netProfit))+'</span></div>'+
+      '</div>'+
+      chartCard('Income vs Expense', incVsExp)+
     '</div>';
 }
 function exportPLCSV(){
