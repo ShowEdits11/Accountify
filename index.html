@@ -1174,6 +1174,264 @@ function chartCard(title, innerHtml, subtitle){
   return '<div class="card chart-card"><div class="section-head"><h2>'+escapeHtml(title)+'</h2>'+(subtitle?('<p>'+escapeHtml(subtitle)+'</p>'):'')+'</div><div class="chart-body">'+innerHtml+'</div></div>';
 }
 
+/* ============================================================
+   PDF GENERATION
+   Loads jsPDF from CDN on first use (the app itself needs no
+   external dependency for anything else). If the library can't
+   load - no internet, CDN blocked - we fail gracefully with a
+   clear toast pointing at the Print button, which always works
+   offline via the browser's own "Save as PDF" destination.
+   ============================================================ */
+let jsPDFLoadPromise = null;
+function loadJsPDF(){
+  if(window.jspdf && window.jspdf.jsPDF) return Promise.resolve(window.jspdf.jsPDF);
+  if(jsPDFLoadPromise) return jsPDFLoadPromise;
+  jsPDFLoadPromise = new Promise(function(resolve, reject){
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+    script.onload = function(){
+      if(window.jspdf && window.jspdf.jsPDF) resolve(window.jspdf.jsPDF);
+      else reject(new Error('jsPDF script loaded but the constructor was not found'));
+    };
+    script.onerror = function(){ jsPDFLoadPromise = null; reject(new Error('Could not load the PDF library')); };
+    document.head.appendChild(script);
+  });
+  return jsPDFLoadPromise;
+}
+
+const PDF_MARGIN = 40, PDF_PAGE_W = 595.28, PDF_PAGE_H = 841.89;
+
+function drawPDFHeader(doc, title, period){
+  const y0 = PDF_MARGIN;
+  let textX = PDF_MARGIN;
+  const logo = state.meta.logoDataUrl;
+  if(logo){
+    try{ doc.addImage(logo, 'PNG', PDF_MARGIN, y0-8, 38, 38); textX = PDF_MARGIN+50; }
+    catch(e){ /* a malformed or unsupported logo should never break the whole report */ }
+  }
+  doc.setFont('helvetica','bold'); doc.setFontSize(14); doc.setTextColor(20);
+  doc.text(state.meta.businessName || 'My Business', textX, y0+8);
+  doc.setFont('helvetica','normal'); doc.setFontSize(10.5); doc.setTextColor(70);
+  doc.text(title, textX, y0+24);
+  doc.setFontSize(8.5); doc.setTextColor(130);
+  doc.text('Period: '+period+'   ·   Generated '+fmtDate(todayISO())+'   ·   Currency: '+baseCurrency(), textX, y0+36);
+  doc.setDrawColor(215); doc.setLineWidth(0.75);
+  doc.line(PDF_MARGIN, y0+48, PDF_PAGE_W-PDF_MARGIN, y0+48);
+  doc.setTextColor(20);
+  return y0+68;
+}
+function addPDFFooters(doc){
+  const n = doc.internal.getNumberOfPages();
+  for(let i=1;i<=n;i++){
+    doc.setPage(i);
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(150);
+    doc.text('Page '+i+' of '+n, PDF_PAGE_W/2, PDF_PAGE_H-24, {align:'center'});
+    doc.text(state.meta.businessName||'', PDF_MARGIN, PDF_PAGE_H-24);
+    doc.setTextColor(20);
+  }
+}
+function ensurePDFSpace(doc, y, needed, title, period){
+  if(y+needed > PDF_PAGE_H-55){ doc.addPage(); return drawPDFHeader(doc, title, period); }
+  return y;
+}
+function drawPDFSectionHeading(doc, y, text, title, period){
+  y = ensurePDFSpace(doc, y, 22, title, period);
+  doc.setFont('helvetica','bold'); doc.setFontSize(10.5); doc.setTextColor(20);
+  doc.text(text, PDF_MARGIN, y);
+  doc.setDrawColor(230); doc.setLineWidth(0.5);
+  doc.line(PDF_MARGIN, y+4, PDF_PAGE_W-PDF_MARGIN, y+4);
+  return y+18;
+}
+function drawPDFSummary(doc, y, items, title, period){
+  doc.setFontSize(9.5);
+  items.forEach(function(it){
+    y = ensurePDFSpace(doc, y, 16, title, period);
+    doc.setFont('helvetica','normal'); doc.setTextColor(70);
+    doc.text(String(it.label), PDF_MARGIN, y);
+    doc.setFont('helvetica','bold'); doc.setTextColor(20);
+    doc.text(String(it.value), PDF_PAGE_W-PDF_MARGIN, y, {align:'right'});
+    y += 15;
+  });
+  return y+8;
+}
+function drawPDFTable(doc, y, headers, rows, colWidths, title, period){
+  const startX = PDF_MARGIN;
+  y = ensurePDFSpace(doc, y, 20, title, period);
+  doc.setFillColor(242,243,245); doc.rect(startX, y-10, PDF_PAGE_W-2*PDF_MARGIN, 16, 'F');
+  doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.setTextColor(70);
+  let x = startX+4;
+  headers.forEach(function(h,i){ doc.text(String(h), x, y); x += colWidths[i]; });
+  y += 13;
+  doc.setFont('helvetica','normal'); doc.setFontSize(8.3); doc.setTextColor(30);
+  if(!rows.length){
+    y = ensurePDFSpace(doc, y, 14, title, period);
+    doc.setTextColor(140); doc.text('No entries.', startX+4, y); doc.setTextColor(30);
+    return y+16;
+  }
+  rows.forEach(function(row, ri){
+    y = ensurePDFSpace(doc, y, 13, title, period);
+    if(ri%2===1){ doc.setFillColor(250,250,251); doc.rect(startX, y-9, PDF_PAGE_W-2*PDF_MARGIN, 13, 'F'); }
+    x = startX+4;
+    row.forEach(function(cell,i){
+      const text = String(cell==null?'':cell);
+      const truncated = doc.getTextWidth ? text : text; // width-aware truncation kept simple; columns are sized generously
+      doc.text(truncated, x, y, {maxWidth: colWidths[i]-4});
+      x += colWidths[i];
+    });
+    y += 13;
+  });
+  return y+10;
+}
+
+function pdfSafeFilename(s){ return String(s).replace(/[^a-z0-9]+/gi,'-').toLowerCase().replace(/^-+|-+$/g,''); }
+
+function getReportPDFData(reportType){
+  const today = todayISO();
+  if(reportType==='dashboard'){
+    const c = calcCore(); const mf = moneyFlowTotals(null,null);
+    return { title:'Dashboard Summary', period:'All Time', sections:[
+      { items:[
+        {label:'Total Sales', value:fmtNPR(c.totalSales)}, {label:'Total Purchase', value:fmtNPR(c.totalPurchases)},
+        {label:'Total Capital', value:fmtNPR(c.capitalIn-c.drawings)}, {label:'Money Flow (Net)', value:fmtNPR(mf.net)},
+        {label:'Net Profit', value:fmtNPR(c.netProfit)}, {label:'Total Receivable', value:fmtNPR(c.AR)},
+        {label:'Total Payable', value:fmtNPR(c.AP)}, {label:'Total Balance (All Accounts)', value:fmtNPR(c.totalAccountsNPR)},
+      ] },
+      { heading:'Account Balances', headers:['Account','Type','Currency','Native Balance','Value ('+baseCurrency()+')'], colWidths:[135,65,60,125,130],
+        rows: activeAccounts().map(function(a){ return [a.name, a.type, a.currency, fmtNative(accountBalanceNative(a.id),a.currency), fmtNPR(accountBalanceNPR(a.id))]; }) },
+    ]};
+  }
+  if(reportType==='sales'){
+    const list = state.sales.slice().sort(function(a,b){ return a.date<b.date?1:-1; });
+    const total = state.sales.reduce(function(s,x){ return s+x.amount; },0);
+    const totalDue = state.sales.reduce(function(s,x){ return s+Math.max(0,saleDue(x)); },0);
+    return { title:'Sales Report', period:'All Time', sections:[
+      { items:[{label:'Total Entries', value:String(list.length)}, {label:'Total Sales', value:fmtNPR(total)}, {label:'Total Due', value:fmtNPR(totalDue)}] },
+      { heading:'Sales', headers:['Date','Customer','Description','Amount','Due','Status'], colWidths:[62,120,120,80,78,55],
+        rows: list.map(function(s){ return [fmtDate(s.date), s.customer, s.description||'', fmtNPR(s.amount), fmtNPR(Math.max(0,saleDue(s))), saleStatus(s)]; }) },
+    ]};
+  }
+  if(reportType==='purchase'){
+    const list = state.purchases.slice().sort(function(a,b){ return a.date<b.date?1:-1; });
+    const total = state.purchases.reduce(function(s,x){ return s+x.amount; },0);
+    const totalDue = state.purchases.reduce(function(s,x){ return s+Math.max(0,purchaseDue(x)); },0);
+    return { title:'Purchase Report', period:'All Time', sections:[
+      { items:[{label:'Total Entries', value:String(list.length)}, {label:'Total Purchases', value:fmtNPR(total)}, {label:'Total Due', value:fmtNPR(totalDue)}] },
+      { heading:'Purchases', headers:['Date','Supplier','Description','Amount','Due','Status'], colWidths:[62,120,120,80,78,55],
+        rows: list.map(function(p){ return [fmtDate(p.date), p.supplier, p.description||'', fmtNPR(p.amount), fmtNPR(Math.max(0,purchaseDue(p))), purchaseStatus(p)]; }) },
+    ]};
+  }
+  if(reportType==='credit'){
+    const list = state.credits.slice().sort(function(a,b){ return a.date<b.date?1:-1; });
+    return { title:'Credit Report', period:'All Time', sections:[
+      { items:[{label:'Total Entries', value:String(list.length)}] },
+      { heading:'Credit Given / Taken', headers:['Date','Party','Type','Amount','Remaining','Status'], colWidths:[65,140,55,90,90,75],
+        rows: list.map(function(c){ const due=Math.max(0,creditDue(c)); return [fmtDate(c.date), c.party, c.type==='given'?'Given':'Taken', fmtNPR(c.amount), fmtNPR(due), due<=0.004?'Settled':'Outstanding']; }) },
+    ]};
+  }
+  if(reportType==='moneyflow'){
+    const mf = moneyFlowTotals(null,null);
+    return { title:'Money Flow Report', period:'All Time', sections:[
+      { items:[{label:'Money In', value:fmtNPR(mf.totalIn)}, {label:'Money Out', value:fmtNPR(mf.totalOut)}, {label:'Net Flow', value:fmtNPR(mf.net)}] },
+      { heading:'Transactions', headers:['Date','Dir','Description','Account','Amount'], colWidths:[60,35,185,115,120],
+        rows: mf.events.map(function(e){ const acc=getAccount(e.accountId); return [fmtDate(e.date), e.direction==='in'?'In':'Out', e.label||e.type, acc?acc.name:'—', (e.direction==='in'?'+':'-')+fmtNPR(e.amountNPR)]; }) },
+    ]};
+  }
+  if(reportType==='due'){
+    const receivables=[], payables=[];
+    state.sales.forEach(function(s){ const d=saleDue(s); if(d>0.004) receivables.push([fmtDate(s.date), s.customer, s.dueDate?fmtDate(s.dueDate):'—', fmtNPR(d)]); });
+    state.credits.filter(function(c){ return c.type==='given'; }).forEach(function(c){ const d=creditDue(c); if(d>0.004) receivables.push([fmtDate(c.date), c.party, c.dueDate?fmtDate(c.dueDate):'—', fmtNPR(d)]); });
+    state.purchases.forEach(function(p){ const d=purchaseDue(p); if(d>0.004) payables.push([fmtDate(p.date), p.supplier, p.dueDate?fmtDate(p.dueDate):'—', fmtNPR(d)]); });
+    state.credits.filter(function(c){ return c.type==='taken'; }).forEach(function(c){ const d=creditDue(c); if(d>0.004) payables.push([fmtDate(c.date), c.party, c.dueDate?fmtDate(c.dueDate):'—', fmtNPR(d)]); });
+    return { title:'Due Report', period:'As of '+fmtDate(today), sections:[
+      { heading:'Receivables — money owed to you', headers:['Date','Party','Due Date','Amount'], colWidths:[75,215,115,110], rows:receivables },
+      { heading:'Payables — money you owe', headers:['Date','Party','Due Date','Amount'], colWidths:[75,215,115,110], rows:payables },
+    ]};
+  }
+  if(reportType==='trial'){
+    const tb = calcTrialBalance();
+    const n = Math.max(tb.dr.length, tb.cr.length);
+    const rows = [];
+    for(let i=0;i<n;i++){ rows.push([tb.dr[i]?tb.dr[i].label:'', tb.dr[i]?fmtNPR(tb.dr[i].amount):'', tb.cr[i]?tb.cr[i].label:'', tb.cr[i]?fmtNPR(tb.cr[i].amount):'']); }
+    rows.push(['TOTAL', fmtNPR(tb.totalDr), 'TOTAL', fmtNPR(tb.totalCr)]);
+    return { title:'Trial Balance', period:'As of '+fmtDate(today), sections:[
+      { items:[{label:'Balanced', value: tb.balanced?'Yes':'NO — REVIEW REQUIRED'}] },
+      { heading:'Trial Balance', headers:['Debit','Amount','Credit','Amount'], colWidths:[150,105,150,110], rows:rows },
+    ]};
+  }
+  if(reportType==='pl'){
+    const pl = calcProfitLoss();
+    const items = [{label:'Sales Revenue', value:fmtNPR(pl.salesRevenue)}];
+    Object.keys(pl.incomeByCategory).forEach(function(k){ items.push({label:k, value:fmtNPR(pl.incomeByCategory[k])}); });
+    items.push({label:'Total Revenue', value:fmtNPR(pl.totalRevenue)});
+    items.push({label:'Purchases (COGS)', value:fmtNPR(pl.purchaseCost)});
+    Object.keys(pl.expenseByCategory).forEach(function(k){ items.push({label:k, value:fmtNPR(pl.expenseByCategory[k])}); });
+    items.push({label:'Total Expenses', value:fmtNPR(pl.totalExpense)});
+    items.push({label:(pl.netProfit>=0?'Net Profit':'Net Loss'), value:fmtNPR(Math.abs(pl.netProfit))});
+    return { title:'Profit & Loss Statement', period:'All Time', sections:[ { items:items } ]};
+  }
+  if(reportType==='bs'){
+    const bs = calcBalanceSheet();
+    const items = [];
+    bs.accounts.filter(function(a){ return !a.archived || Math.abs(a.balanceNPR)>0.004; }).forEach(function(a){ items.push({label:a.name+' ('+a.currency+')', value:fmtNPR(a.balanceNPR)}); });
+    items.push({label:'Accounts Receivable', value:fmtNPR(bs.AR)});
+    items.push({label:'TOTAL ASSETS', value:fmtNPR(bs.totalAssets)});
+    const items2 = [];
+    items2.push({label:'Accounts Payable', value:fmtNPR(bs.AP)});
+    items2.push({label:'Opening Balances & Adjustments', value:fmtNPR(bs.openingBalances)});
+    items2.push({label:'Capital Contributed', value:fmtNPR(bs.capitalIn)});
+    items2.push({label:'Less: Drawings', value:'-'+fmtNPR(bs.drawings)});
+    items2.push({label:'Net Profit (Retained)', value:fmtNPR(bs.netProfit)});
+    items2.push({label:'Unrealized FX Gain/Loss', value:fmtNPR(bs.fxRevaluation)});
+    items2.push({label:'TOTAL EQUITY', value:fmtNPR(bs.totalEquity)});
+    items2.push({label:'TOTAL LIABILITIES + EQUITY', value:fmtNPR(bs.totalLiabPlusEquity)});
+    return { title:'Balance Sheet', period:'As of '+fmtDate(today), sections:[
+      { items:[{label:'Balanced', value: bs.balanced?'Yes':'NO — REVIEW REQUIRED'}] },
+      { heading:'Assets', items:items },
+      { heading:'Liabilities & Equity', items:items2 },
+    ]};
+  }
+  if(reportType==='profitability'){
+    const pl = calcProfitLoss();
+    const months = monthlyProfit(12);
+    const margin = pl.totalRevenue>0 ? (pl.netProfit/pl.totalRevenue*100) : 0;
+    return { title:'Profitability Report', period:'All Time', sections:[
+      { items:[
+        {label:'Total Revenue', value:fmtNPR(pl.totalRevenue)}, {label:'Total Costs', value:fmtNPR(pl.totalExpense)},
+        {label:(pl.netProfit>=0?'Net Profit':'Net Loss'), value:fmtNPR(Math.abs(pl.netProfit))}, {label:'Profit Margin', value:margin.toFixed(1)+'%'},
+      ] },
+      { heading:'Monthly Profit Trend (Last 12 Months)', headers:['Month','Net Profit'], colWidths:[255,260],
+        rows: months.map(function(m){ return [m.label, fmtNPR(m.value)]; }) },
+    ]};
+  }
+  return { title:'Report', period:'All Time', sections:[] };
+}
+
+function downloadReportPDF(reportType){
+  toast('Preparing PDF…');
+  loadJsPDF().then(function(JsPDFCtor){
+    try{
+      const data = getReportPDFData(reportType);
+      const doc = new JsPDFCtor({ unit:'pt', format:'a4' });
+      let y = drawPDFHeader(doc, data.title, data.period);
+      data.sections.forEach(function(section){
+        if(section.heading) y = drawPDFSectionHeading(doc, y, section.heading, data.title, data.period);
+        if(section.items) y = drawPDFSummary(doc, y, section.items, data.title, data.period);
+        if(section.headers) y = drawPDFTable(doc, y, section.headers, section.rows||[], section.colWidths, data.title, data.period);
+        y += 6;
+      });
+      addPDFFooters(doc);
+      doc.save(pdfSafeFilename(data.title)+'-'+todayISO()+'.pdf');
+      toast('PDF downloaded','success');
+    }catch(err){
+      console.error('PDF generation failed', err);
+      toast('Could not generate the PDF. Try Print instead and choose "Save as PDF".', 'error');
+    }
+  }).catch(function(err){
+    console.error('PDF library failed to load', err);
+    toast('Could not load the PDF generator (check your internet connection). Try Print instead and choose "Save as PDF".', 'error');
+  });
+}
+
 
 function getAccountOr(id){ return getAccount(id); }
 function addAccount(d){
@@ -1376,10 +1634,13 @@ function renderDashboard(){
   const c = calcCore();
   const mf = moneyFlowTotals(null,null);
   const el = document.getElementById('page-dashboard');
-  const maxBar = Math.max(c.totalSales, c.totalPurchases, 1);
-  const salesPct = Math.min(100, (c.totalSales/maxBar)*100);
-  const purchPct = Math.min(100, (c.totalPurchases/maxBar)*100);
+  const monthly = monthlySalesPurchases(6);
+  const currencyDist = {};
+  activeAccounts().forEach(function(a){ currencyDist[a.currency] = (currencyDist[a.currency]||0) + Math.max(0,accountBalanceNPR(a.id)); });
+  const currencyDonutData = Object.keys(currencyDist).map(function(k){ return {label:k, value:currencyDist[k]}; });
   el.innerHTML =
+    '<div class="section-head"><div><h2>Dashboard</h2><p>Overview of your business</p></div>'+
+      '<button class="btn" onclick="downloadReportPDF(\'dashboard\')">'+icon('download')+' Download PDF</button></div>'+
     '<div class="stat-grid">'+
       '<div class="stat-card" style="--stat-color:var(--accent); --stat-soft:var(--accent-soft)">'+
         '<div class="stat-icon">'+icon('trendUp')+'</div><div class="stat-label">Total Sales</div>'+
@@ -1405,15 +1666,12 @@ function renderDashboard(){
       '<div class="mini-stat"><div class="l">Total Payable</div><div class="v text-red">'+fmtNPR(c.AP)+'</div></div>'+
     '</div>'+
     '<div class="grid-2">'+
-      '<div class="card"><div class="section-head"><h2>Recent activity</h2></div>'+renderRecentActivity()+'</div>'+
       '<div>'+
-        '<div class="card"><div class="section-head"><h2>Sales vs Purchase</h2></div>'+
-          '<div class="bar-compare">'+
-            '<div class="bar-row"><div class="bl"><span class="lbl">Sales</span><span class="val">'+fmtNPR(c.totalSales)+'</span></div>'+
-              '<div class="bar-track"><div class="bar-fill" style="width:'+salesPct+'%; background:var(--accent)"></div></div></div>'+
-            '<div class="bar-row"><div class="bl"><span class="lbl">Purchase</span><span class="val">'+fmtNPR(c.totalPurchases)+'</span></div>'+
-              '<div class="bar-track"><div class="bar-fill" style="width:'+purchPct+'%; background:var(--blue)"></div></div></div>'+
-          '</div></div>'+
+        chartCard('Monthly Sales vs Purchase', svgBarChart(monthly, {color:'var(--accent)', color2:'var(--blue)', label1:'Sales', label2:'Purchase', emptyMsg:'Record a sale or purchase to see this trend'}), 'Last 6 months')+
+        '<div class="card"><div class="section-head"><h2>Recent activity</h2></div>'+renderRecentActivity()+'</div>'+
+      '</div>'+
+      '<div>'+
+        chartCard('Currency Distribution', svgDonutChart(currencyDonutData, {emptyMsg:'Add an account to see this'}), 'Share of total balance ('+baseCurrency()+') by currency')+
         '<div class="card"><div class="section-head"><h2>Accounts</h2><a class="btn btn-ghost btn-sm" href="#accounts">View all</a></div>'+renderAccountsMini()+'</div>'+
       '</div>'+
     '</div>';
@@ -2427,7 +2685,6 @@ function balanceSheetHtml(){
         '<div class="ledger-row"><span class="name">Unrealized FX Gain/Loss <span class="text-dim" style="font-size:10.5px">(revaluation)</span></span><span class="amt '+(bs.fxRevaluation>=0?'text-green':'text-red')+'">'+fmtNPR(bs.fxRevaluation)+'</span></div>'+
         '<div class="ledger-total"><span>Total Equity</span><span class="amt">'+fmtNPR(bs.totalEquity)+'</span></div>'+
         '<div class="ledger-grand"><span>Total Liabilities + Equity</span><span class="amt">'+fmtNPR(bs.totalLiabPlusEquity)+'</span></div>'+
-        '<p class="hint" style="margin-top:10px">Unrealized FX Gain/Loss reflects the change in value of your foreign-currency and platform-credit holdings since they were acquired, based on today\'s rates. It does not change your realized Net Profit above — that stays locked to the rate at the time of each transaction.</p></div>'+
     '</div>';
 }
 function exportBalanceSheetCSV(){
@@ -2601,15 +2858,25 @@ function migrateBaseCurrency(newBase, referenceRate){
   // Every FROZEN rate snapshot was recorded in terms of the OLD base currency and must be
   // re-expressed in the new one too - otherwise historical COGS/P&L would silently mix currencies
   // (e.g. a frozen "165" meaning "165 NPR" would get misread as "165 USD" after switching to USD).
+  // Crucially, a snapshot that belongs to an account whose currency IS the new base must become
+  // exactly 1 - not divided by the reference rate - since there is no FX exposure to your own
+  // reporting currency, no matter what the frozen rate happened to read historically. Applying the
+  // blanket division here instead would fabricate a spurious FX gain/loss on the base-currency
+  // account itself the moment the switch happens.
   // The native amounts themselves (receivedNative, payNative, fromAmount, etc.) are real physical
   // quantities and are never touched.
-  function migRate(v){ return (v==null) ? v : v/referenceRate; }
-  state.sales.forEach(function(s){ s.accountRateSnap = migRate(s.accountRateSnap); s.payAccountRateSnap = migRate(s.payAccountRateSnap); });
-  state.purchases.forEach(function(p){ p.accountRateSnap = migRate(p.accountRateSnap); p.receiveAccountRateSnap = migRate(p.receiveAccountRateSnap); });
-  state.credits.forEach(function(c){ c.accountRateSnap = migRate(c.accountRateSnap); });
-  state.cashTx.forEach(function(t){ t.rateSnap = migRate(t.rateSnap); });
-  state.transfers.forEach(function(t){ t.fromRateSnap = migRate(t.fromRateSnap); t.toRateSnap = migRate(t.toRateSnap); });
-  state.settlements.forEach(function(s){ s.rateSnap = migRate(s.rateSnap); });
+  function migSnapFor(accountId, v){
+    if(v==null) return v;
+    const acc = getAccount(accountId);
+    if(acc && acc.currency===newBase) return 1;
+    return v/referenceRate;
+  }
+  state.sales.forEach(function(s){ s.accountRateSnap = migSnapFor(s.accountId, s.accountRateSnap); s.payAccountRateSnap = migSnapFor(s.payAccountId, s.payAccountRateSnap); });
+  state.purchases.forEach(function(p){ p.accountRateSnap = migSnapFor(p.accountId, p.accountRateSnap); p.receiveAccountRateSnap = migSnapFor(p.receiveAccountId, p.receiveAccountRateSnap); });
+  state.credits.forEach(function(c){ c.accountRateSnap = migSnapFor(c.accountId, c.accountRateSnap); });
+  state.cashTx.forEach(function(t){ t.rateSnap = migSnapFor(t.accountId, t.rateSnap); });
+  state.transfers.forEach(function(t){ t.fromRateSnap = migSnapFor(t.fromAccountId, t.fromRateSnap); t.toRateSnap = migSnapFor(t.toAccountId, t.toRateSnap); });
+  state.settlements.forEach(function(s){ s.rateSnap = migSnapFor(s.accountId, s.rateSnap); });
   state.meta.baseCurrency = newBase;
   saveState();
 }
