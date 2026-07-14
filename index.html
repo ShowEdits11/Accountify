@@ -182,7 +182,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 
 .content{
   flex:1; padding:24px; max-width:1400px; width:100%; margin:0 auto;
-
   background-attachment:local;
 }
 [data-theme="light"] .content{background-image:none;}
@@ -299,6 +298,7 @@ thead th{
 tbody td{padding:11px 14px; border-bottom:1px solid var(--border-soft); vertical-align:middle;}
 tbody tr:last-child td{border-bottom:none;}
 tbody tr:hover{background:var(--surface-2);}
+tbody tr.clickable-row{cursor:pointer;}
 td.num,th.num{text-align:right; font-family:var(--mono);}
 tfoot td{padding:12px 14px; font-weight:700; background:var(--surface-2); border-top:1px solid var(--border);}
 .empty-row td{text-align:center; color:var(--text-faint); padding:36px 14px;}
@@ -645,6 +645,15 @@ function fmtDate(iso){
   if(isNaN(d)) return iso;
   const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return String(d.getDate()).padStart(2,'0')+' '+months[d.getMonth()]+' '+d.getFullYear();
+}
+function fmtDateTime(isoTimestamp){
+  if(!isoTimestamp) return '—';
+  const d = new Date(isoTimestamp);
+  if(isNaN(d)) return isoTimestamp;
+  const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let h = d.getHours(); const ampm = h>=12?'PM':'AM'; h = h%12; if(h===0) h=12;
+  const m = String(d.getMinutes()).padStart(2,'0');
+  return String(d.getDate()).padStart(2,'0')+' '+months[d.getMonth()]+' '+d.getFullYear()+', '+h+':'+m+' '+ampm;
 }
 
 function toast(msg, type){
@@ -1552,6 +1561,92 @@ function addSettlement(d){
     amountNative:Number(d.amountNative)||0, rateSnap: acc?acc.rate:1, note:(d.note||'').trim(), createdAt:nowISOTime() };
   state.settlements.push(rec); saveState(); return rec;
 }
+function updateSale(id, d){
+  const rec = state.sales.find(function(x){ return x.id===id; });
+  if(!rec) return null;
+  if(d.accountId !== rec.accountId){
+    const acc = d.accountId ? getAccount(d.accountId) : null;
+    rec.accountRateSnap = acc ? acc.rate : null;
+  }
+  if(d.payAccountId !== rec.payAccountId){
+    const payAcc = d.payAccountId ? getAccount(d.payAccountId) : null;
+    rec.payAccountRateSnap = payAcc ? payAcc.rate : null;
+  }
+  rec.date=d.date; rec.customer=d.customer.trim(); rec.description=(d.description||'').trim();
+  rec.amount=Number(d.amount)||0; rec.receivedNative=Number(d.receivedNative)||0; rec.accountId=d.accountId||null;
+  rec.payAccountId=d.payAccountId||null; rec.payNative=Number(d.payNative)||0;
+  rec.dueDate=d.dueDate||''; rec.notes=(d.notes||'').trim();
+  rec.editedAt = nowISOTime();
+  saveState();
+  rememberParty('customers', rec.customer);
+  return rec;
+}
+function updatePurchase(id, d){
+  const rec = state.purchases.find(function(x){ return x.id===id; });
+  if(!rec) return null;
+  if(d.accountId !== rec.accountId){
+    const acc = d.accountId ? getAccount(d.accountId) : null;
+    rec.accountRateSnap = acc ? acc.rate : null;
+  }
+  if(d.receiveAccountId !== rec.receiveAccountId){
+    const recvAcc = d.receiveAccountId ? getAccount(d.receiveAccountId) : null;
+    rec.receiveAccountRateSnap = recvAcc ? recvAcc.rate : null;
+  }
+  rec.date=d.date; rec.supplier=d.supplier.trim(); rec.description=(d.description||'').trim();
+  rec.amount=Number(d.amount)||0; rec.paidNative=Number(d.paidNative)||0; rec.accountId=d.accountId||null;
+  rec.receiveAccountId=d.receiveAccountId||null; rec.receiveNative=Number(d.receiveNative)||0;
+  rec.dueDate=d.dueDate||''; rec.notes=(d.notes||'').trim();
+  rec.editedAt = nowISOTime();
+  saveState();
+  rememberParty('suppliers', rec.supplier);
+  return rec;
+}
+function updateCredit(id, d){
+  const rec = state.credits.find(function(x){ return x.id===id; });
+  if(!rec) return null;
+  if(d.accountId !== rec.accountId){
+    const acc = d.accountId ? getAccount(d.accountId) : null;
+    rec.accountRateSnap = acc ? (acc.rate||1) : null;
+  }
+  rec.type=d.type; rec.party=d.party.trim(); rec.amount=Number(d.amount)||0; rec.accountId=d.accountId||null;
+  rec.accountNative = rec.accountId ? (rec.amount / (rec.accountRateSnap||1)) : null;
+  rec.date=d.date; rec.dueDate=d.dueDate||''; rec.notes=(d.notes||'').trim();
+  rec.editedAt = nowISOTime();
+  saveState();
+  return rec;
+}
+function updateCashTx(id, d){
+  const rec = state.cashTx.find(function(x){ return x.id===id; });
+  if(!rec) return null;
+  if(d.accountId !== rec.accountId){
+    const acc = getAccount(d.accountId);
+    rec.rateSnap = acc ? acc.rate : 1;
+  }
+  rec.kind=d.kind; rec.date=d.date; rec.accountId=d.accountId; rec.category=d.category;
+  rec.amount=Number(d.amount)||0; rec.note=(d.note||'').trim();
+  rec.editedAt = nowISOTime();
+  saveState();
+  rememberCategory(d.kind, d.category);
+  return rec;
+}
+function updateTransfer(id, d){
+  const rec = state.transfers.find(function(x){ return x.id===id; });
+  if(!rec) return null;
+  if(d.fromAccountId !== rec.fromAccountId){
+    const fromAcc = getAccount(d.fromAccountId);
+    rec.fromRateSnap = fromAcc ? fromAcc.rate : 1;
+  }
+  if(d.toAccountId !== rec.toAccountId){
+    const toAcc = getAccount(d.toAccountId);
+    rec.toRateSnap = toAcc ? toAcc.rate : 1;
+  }
+  rec.date=d.date; rec.fromAccountId=d.fromAccountId; rec.toAccountId=d.toAccountId;
+  rec.fromAmount=Number(d.fromAmount)||0; rec.toAmount=Number(d.toAmount)||0;
+  rec.note=(d.note||'').trim();
+  rec.editedAt = nowISOTime();
+  saveState();
+  return rec;
+}
 function deleteRecord(kind, id){
   if(kind==='sale'){ state.sales=state.sales.filter(function(x){ return x.id!==id; }); state.settlements=state.settlements.filter(function(s){ return !(s.refType==='sale'&&s.refId===id); }); }
   if(kind==='purchase'){ state.purchases=state.purchases.filter(function(x){ return x.id!==id; }); state.settlements=state.settlements.filter(function(s){ return !(s.refType==='purchase'&&s.refId===id); }); }
@@ -1791,20 +1886,22 @@ function renderAccounts(){
 }
 function renderAccountsByType(type, label){
   const list = state.accounts.filter(function(a){ return a.type===type && !a.archived; });
-  const colorMap = { NPR:'var(--accent)', INR:'var(--blue)', USD:'var(--green)', USDT:'var(--teal)' };
-  const softMap = { NPR:'var(--accent-soft)', INR:'var(--blue-soft)', USD:'var(--green-soft)', USDT:'var(--teal-soft)' };
+  const colorMap = { NPR:'var(--accent)', INR:'var(--blue)', USD:'var(--green)', USDT:'var(--teal)', BDT:'var(--gold)' };
+  const softMap = { NPR:'var(--accent-soft)', INR:'var(--blue-soft)', USD:'var(--green-soft)', USDT:'var(--teal-soft)', BDT:'var(--gold-soft)' };
+  const acctColor = function(cur){ return colorMap[cur] || 'var(--text-dim)'; };
+  const acctSoft = function(cur){ return softMap[cur] || 'var(--surface-3)'; };
   let cardsHtml;
   if(!list.length){
     cardsHtml = '<div class="empty-state" style="padding:26px"><p>No '+label.toLowerCase()+' yet.</p></div>';
   } else {
     cardsHtml = '<div class="acct-grid">' + list.map(function(a){
-      return '<div class="acct-card" style="--acct-color:'+colorMap[a.currency]+'; --acct-soft:'+softMap[a.currency]+'">'+
+      return '<div class="acct-card" style="--acct-color:'+acctColor(a.currency)+'; --acct-soft:'+acctSoft(a.currency)+'">'+
         '<div class="acct-top"><div><div class="acct-type">'+escapeHtml(type)+'</div><div class="acct-name">'+escapeHtml(a.name)+'</div>'+
         (a.number ? '<div class="acct-num">'+escapeHtml(a.number)+'</div>' : '')+'</div>'+
-        '<div class="acct-curr-badge">'+a.currency+'</div></div>'+
+        '<div class="acct-curr-badge">'+escapeHtml(a.currency)+'</div></div>'+
         '<div class="acct-balance">'+fmtNative(accountBalanceNative(a.id), a.currency)+'</div>'+
         (a.currency!==baseCurrency() ? '<div class="acct-npr">≈ '+fmtNPR(accountBalanceNPR(a.id))+'</div>' : '')+
-        (a.currency!==baseCurrency() ? '<div class="acct-rate">1 '+a.currency+' = '+fmtNum(a.rate)+' '+baseCurrency()+'</div>' : '')+
+        (a.currency!==baseCurrency() ? '<div class="acct-rate">1 '+escapeHtml(a.currency)+' = '+fmtNum(a.rate)+' '+baseCurrency()+'</div>' : '')+
         '<div class="acct-actions"><button class="btn btn-ghost btn-sm" onclick="openAccountModal(\''+a.id+'\')">'+icon('edit')+' Edit</button>'+
         '<button class="btn btn-ghost btn-sm" onclick="handleRemoveAccount(\''+a.id+'\')">'+icon(accountHasHistory(a.id)?'archive':'trash')+' '+(accountHasHistory(a.id)?'Archive':'Delete')+'</button></div></div>';
     }).join('') + '</div>';
@@ -1904,8 +2001,416 @@ function deleteRecordConfirm(kind,id){
   if(confirm('Delete this record? This cannot be undone.')){
     deleteRecord(kind,id);
     toast('Record deleted','success');
+    closeModal();
     navigateTo(currentPage);
   }
+}
+
+/* ============================================================
+   TRANSACTION DETAIL VIEW (read-only) + EDIT
+   ============================================================ */
+function detailRow(label, value, strong){
+  return '<div class="ledger-row"><span class="name">'+escapeHtml(label)+'</span><span class="amt" style="font-weight:'+(strong?'800':'600')+'">'+value+'</span></div>';
+}
+function settlementHistoryHtml(refType, refId){
+  const list = state.settlements.filter(function(s){ return s.refType===refType && s.refId===refId; });
+  if(!list.length) return '';
+  const rows = list.map(function(s){
+    const acc = getAccount(s.accountId);
+    return '<div class="ledger-row"><span class="name">'+fmtDate(s.date)+' · '+(acc?escapeHtml(acc.name):'Deleted account')+(s.note?' — '+escapeHtml(s.note):'')+'</span>'+
+      '<span class="amt">'+(acc?fmtNative(s.amountNative, acc.currency):fmtNum(s.amountNative))+'</span></div>';
+  }).join('');
+  return '<div class="ledger-section-title">Payments recorded against this</div>'+rows;
+}
+function openTransactionDetail(kind, id){
+  let body = '', title = 'Transaction Details';
+  if(kind==='sale'){
+    const s = state.sales.find(function(x){ return x.id===id; }); if(!s) return;
+    const acc = s.accountId ? getAccount(s.accountId) : null;
+    const payAcc = s.payAccountId ? getAccount(s.payAccountId) : null;
+    const st = saleStatus(s); const stMap={paid:'badge-green',partial:'badge-gold',credit:'badge-red'};
+    title = 'Sale — '+s.customer;
+    body = '<span class="badge '+stMap[st]+'" style="margin-bottom:12px; display:inline-block">'+st+'</span>'+
+      detailRow('Date', fmtDate(s.date))+
+      detailRow('Recorded', fmtDateTime(s.createdAt))+
+      (s.editedAt ? detailRow('Last edited', fmtDateTime(s.editedAt)) : '')+
+      detailRow('Description', escapeHtml(s.description||'—'))+
+      detailRow('Sale Amount', fmtNPR(s.amount), true)+
+      (acc ? detailRow('Received into', escapeHtml(acc.name)+' · '+fmtNative(s.receivedNative,acc.currency)+(acc.currency!==baseCurrency()?' (rate '+fmtNum(s.accountRateSnap)+' at the time)':'')) : '')+
+      (payAcc ? detailRow('Cost / stock used', escapeHtml(payAcc.name)+' · '+fmtNative(s.payNative,payAcc.currency)+(payAcc.currency!==baseCurrency()?' (rate '+fmtNum(s.payAccountRateSnap)+' at the time)':'')) : '')+
+      (payAcc ? detailRow('Cost of goods sold', fmtNPR(saleCogsNPR(s))) : '')+
+      (s.dueDate ? detailRow('Due date', fmtDate(s.dueDate)) : '')+
+      detailRow('Remaining due', fmtNPR(Math.max(0,saleDue(s))))+
+      (s.notes ? detailRow('Notes', escapeHtml(s.notes)) : '')+
+      settlementHistoryHtml('sale', s.id);
+  }
+  if(kind==='purchase'){
+    const p = state.purchases.find(function(x){ return x.id===id; }); if(!p) return;
+    const acc = p.accountId ? getAccount(p.accountId) : null;
+    const recvAcc = p.receiveAccountId ? getAccount(p.receiveAccountId) : null;
+    const st = purchaseStatus(p); const stMap={paid:'badge-green',partial:'badge-gold',credit:'badge-red'};
+    title = 'Purchase — '+p.supplier;
+    body = '<span class="badge '+stMap[st]+'" style="margin-bottom:12px; display:inline-block">'+st+'</span>'+
+      detailRow('Date', fmtDate(p.date))+
+      detailRow('Recorded', fmtDateTime(p.createdAt))+
+      (p.editedAt ? detailRow('Last edited', fmtDateTime(p.editedAt)) : '')+
+      detailRow('Description', escapeHtml(p.description||'—'))+
+      detailRow('Purchase Amount', fmtNPR(p.amount), true)+
+      (acc ? detailRow('Paid from', escapeHtml(acc.name)+' · '+fmtNative(p.paidNative,acc.currency)+(acc.currency!==baseCurrency()?' (rate '+fmtNum(p.accountRateSnap)+' at the time)':'')) : '')+
+      (recvAcc ? detailRow('Received into (asset exchange)', escapeHtml(recvAcc.name)+' · '+fmtNative(p.receiveNative,recvAcc.currency)+(recvAcc.currency!==baseCurrency()?' (rate '+fmtNum(p.receiveAccountRateSnap)+' at the time)':'')) : '')+
+      (recvAcc ? detailRow('Exchange spread (cost/gain)', fmtNPR(purchaseExchangeSpreadNPR(p))) : '')+
+      (p.dueDate ? detailRow('Due date', fmtDate(p.dueDate)) : '')+
+      detailRow('Remaining due', fmtNPR(Math.max(0,purchaseDue(p))))+
+      (p.notes ? detailRow('Notes', escapeHtml(p.notes)) : '')+
+      settlementHistoryHtml('purchase', p.id);
+  }
+  if(kind==='credit'){
+    const c = state.credits.find(function(x){ return x.id===id; }); if(!c) return;
+    const acc = c.accountId ? getAccount(c.accountId) : null;
+    const due = Math.max(0,creditDue(c));
+    title = 'Credit — '+c.party;
+    body = '<span class="badge '+(c.type==='given'?'badge-green':'badge-red')+'" style="margin-bottom:12px; display:inline-block">'+(c.type==='given'?'You Gave':'You Took')+'</span>'+
+      detailRow('Date', fmtDate(c.date))+
+      detailRow('Recorded', fmtDateTime(c.createdAt))+
+      (c.editedAt ? detailRow('Last edited', fmtDateTime(c.editedAt)) : '')+
+      detailRow('Amount', fmtNPR(c.amount), true)+
+      (acc ? detailRow('Account involved', escapeHtml(acc.name)+' · '+fmtNative(c.accountNative,acc.currency)+(acc.currency!==baseCurrency()?' (rate '+fmtNum(c.accountRateSnap)+' at the time)':'')) : detailRow('Account involved','None — recorded as a plain due'))+
+      (c.dueDate ? detailRow('Due date', fmtDate(c.dueDate)) : '')+
+      detailRow('Remaining', fmtNPR(due))+
+      detailRow('Status', due<=0.004?'Settled':'Outstanding')+
+      (c.notes ? detailRow('Notes', escapeHtml(c.notes)) : '')+
+      settlementHistoryHtml('credit', c.id);
+  }
+  if(kind==='cashTx'){
+    const t = state.cashTx.find(function(x){ return x.id===id; }); if(!t) return;
+    const acc = getAccount(t.accountId);
+    title = (t.kind==='in'?'Cash In — ':'Cash Out — ')+t.category;
+    body = '<span class="badge '+(t.kind==='in'?'badge-green':'badge-red')+'" style="margin-bottom:12px; display:inline-block">'+(t.kind==='in'?'In':'Out')+'</span>'+
+      detailRow('Date', fmtDate(t.date))+
+      detailRow('Recorded', fmtDateTime(t.createdAt))+
+      (t.editedAt ? detailRow('Last edited', fmtDateTime(t.editedAt)) : '')+
+      detailRow('Account', acc?escapeHtml(acc.name):'Deleted account')+
+      detailRow('Category', escapeHtml(t.category))+
+      detailRow('Amount', acc?fmtNative(t.amount,acc.currency):fmtNum(t.amount), true)+
+      (acc && acc.currency!==baseCurrency() ? detailRow('Rate at the time', fmtNum(t.rateSnap)+' · ≈ '+fmtNPR(cashTxNPR(t))) : '')+
+      (t.note ? detailRow('Note', escapeHtml(t.note)) : '');
+  }
+  if(kind==='transfer'){
+    const t = state.transfers.find(function(x){ return x.id===id; }); if(!t) return;
+    const fromAcc = getAccount(t.fromAccountId), toAcc = getAccount(t.toAccountId);
+    const fee = transferFeeNPR(t);
+    title = 'Transfer';
+    body = detailRow('Date', fmtDate(t.date))+
+      detailRow('Recorded', fmtDateTime(t.createdAt))+
+      (t.editedAt ? detailRow('Last edited', fmtDateTime(t.editedAt)) : '')+
+      detailRow('From', (fromAcc?escapeHtml(fromAcc.name):'Deleted account')+' · '+(fromAcc?fmtNative(t.fromAmount,fromAcc.currency):fmtNum(t.fromAmount))+(fromAcc&&fromAcc.currency!==baseCurrency()?' (rate '+fmtNum(t.fromRateSnap)+')':''))+
+      detailRow('To', (toAcc?escapeHtml(toAcc.name):'Deleted account')+' · '+(toAcc?fmtNative(t.toAmount,toAcc.currency):fmtNum(t.toAmount))+(toAcc&&toAcc.currency!==baseCurrency()?' (rate '+fmtNum(t.toRateSnap)+')':''))+
+      (Math.abs(fee)>0.004 ? detailRow(fee>0?'Transfer fee/loss':'Exchange gain', fmtNPR(Math.abs(fee))) : '')+
+      (t.note ? detailRow('Note', escapeHtml(t.note)) : '');
+  }
+  body += '<div class="form-actions"><button class="btn btn-danger" onclick="deleteRecordConfirm(\''+kind+'\',\''+id+'\')">'+icon('trash')+' Delete</button><div style="flex:1"></div><button class="btn btn-ghost" onclick="closeModal()">Close</button><button class="btn btn-primary" onclick="openEditTransaction(\''+kind+'\',\''+id+'\')">'+icon('edit')+' Edit</button></div>';
+  openModal(title, body);
+}
+function openEditTransaction(kind, id){
+  closeModal();
+  if(kind==='sale') openEditSaleModal(id);
+  if(kind==='purchase') openEditPurchaseModal(id);
+  if(kind==='credit') openEditCreditModal(id);
+  if(kind==='cashTx') openEditCashTxModal(id);
+  if(kind==='transfer') openEditTransferModal(id);
+}
+
+/* ---- Edit: Sale ---- */
+function openEditSaleModal(id){
+  const s = state.sales.find(function(x){ return x.id===id; }); if(!s) return;
+  const body =
+    '<div class="form-grid">'+
+      '<div class="field"><label>Date</label><input type="date" id="eSDate" value="'+s.date+'"></div>'+
+      '<div class="field"><label>Customer Name</label><input type="text" id="eSCustomer" value="'+escapeHtml(s.customer)+'"></div>'+
+      '<div class="field full"><label>Description</label><input type="text" id="eSDescription" value="'+escapeHtml(s.description||'')+'"></div>'+
+      '<div class="field"><label>Sale Amount ('+baseCurrency()+')</label><input type="number" id="eSAmount" min="0" step="0.01" value="'+s.amount+'" oninput="editUpdateSalePreview()"></div>'+
+      '<div class="field"><label>Received Into</label><select id="eSAccount" onchange="editUpdateSalePreview()">'+acctOptions(s.accountId,null,'— Not received yet (Credit) —')+'</select></div>'+
+      '<div class="field" id="eSReceivedWrap" style="display:'+(s.accountId?'':'none')+'"><label>Amount Received <span id="eSReceivedCurLabel" class="text-dim"></span></label>'+
+        '<div class="inline-suffix"><input type="number" id="eSReceived" min="0" step="0.01" value="'+(s.receivedNative||0)+'" oninput="editUpdateSalePreview()">'+
+        '<button type="button" class="btn btn-sm" onclick="editFillFullSale()">Full amount</button></div><div class="convert-note" id="eSConvertNote"></div></div>'+
+      '<div class="field"><label>Due Date <span class="text-dim">(optional)</span></label><input type="date" id="eSDueDate" value="'+(s.dueDate||'')+'"></div>'+
+      '<div class="field"><label>Pay Account <span class="text-dim">(cost/stock used, optional)</span></label><select id="eSPayAccount" onchange="editUpdateSalePayPreview()">'+acctOptions(s.payAccountId,s.accountId,'— None —')+'</select></div>'+
+      '<div class="field" id="eSPayWrap" style="display:'+(s.payAccountId?'':'none')+'"><label>Amount Deducted <span id="eSPayCurLabel" class="text-dim"></span></label><input type="number" id="eSPayAmount" min="0" step="0.0001" value="'+(s.payNative||0)+'" oninput="editUpdateSalePayPreview()"></div>'+
+      '<div class="field full" id="eSPayNoteWrap" style="display:none"><div class="convert-note" id="eSPayNote"></div></div>'+
+      '<div class="field full"><label>Notes</label><input type="text" id="eSNotes" value="'+escapeHtml(s.notes||'')+'"></div>'+
+    '</div><div class="error-text" id="eSError"></div>'+
+    '<div class="form-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitEditSale(\''+id+'\')">'+icon('check')+' Save Changes</button></div>';
+  openModal('Edit Sale', body, true);
+  editUpdateSalePreview(); editUpdateSalePayPreview();
+}
+function editUpdateSalePreview(){
+  const accId = document.getElementById('eSAccount').value;
+  const wrap = document.getElementById('eSReceivedWrap');
+  if(!accId){ wrap.style.display='none'; return; }
+  wrap.style.display='';
+  const acc = getAccount(accId);
+  document.getElementById('eSReceivedCurLabel').textContent = '('+acc.currency+')';
+  const received = Number(document.getElementById('eSReceived').value)||0;
+  document.getElementById('eSConvertNote').textContent = acc.currency!==baseCurrency() ? ('≈ '+fmtNPR(received*acc.rate)+' at current rate '+fmtNum(acc.rate)) : '';
+}
+function editFillFullSale(){
+  const accId = document.getElementById('eSAccount').value; if(!accId) return;
+  const acc = getAccount(accId);
+  const amount = Number(document.getElementById('eSAmount').value)||0;
+  document.getElementById('eSReceived').value = (amount/(acc.rate||1)).toFixed(2);
+  editUpdateSalePreview();
+}
+function editUpdateSalePayPreview(){
+  const accId = document.getElementById('eSPayAccount').value;
+  const wrap = document.getElementById('eSPayWrap'), noteWrap = document.getElementById('eSPayNoteWrap');
+  if(!accId){ wrap.style.display='none'; noteWrap.style.display='none'; return; }
+  wrap.style.display='';
+  const acc = getAccount(accId);
+  document.getElementById('eSPayCurLabel').textContent = '('+acc.currency+')';
+  const payNative = Number(document.getElementById('eSPayAmount').value)||0;
+  if(payNative>0){ noteWrap.style.display=''; document.getElementById('eSPayNote').textContent = 'Draws down '+fmtNative(payNative,acc.currency)+' from '+acc.name+' as fulfillment cost.'; }
+  else { noteWrap.style.display='none'; }
+}
+function submitEditSale(id){
+  const date=document.getElementById('eSDate').value;
+  const customer=document.getElementById('eSCustomer').value.trim();
+  const description=document.getElementById('eSDescription').value;
+  const amount=Number(document.getElementById('eSAmount').value);
+  const accountId=document.getElementById('eSAccount').value || null;
+  const received=accountId?(Number(document.getElementById('eSReceived').value)||0):0;
+  const dueDate=document.getElementById('eSDueDate').value;
+  const notes=document.getElementById('eSNotes').value;
+  const payAccountId=document.getElementById('eSPayAccount').value || null;
+  const payNative=payAccountId?(Number(document.getElementById('eSPayAmount').value)||0):0;
+  const err=document.getElementById('eSError');
+  if(!date||!customer||!amount||amount<=0){ err.textContent='Please fill in date, customer name and a valid sale amount.'; return; }
+  if(received<0){ err.textContent='Received amount cannot be negative.'; return; }
+  if(payAccountId && payNative<=0){ err.textContent='Please enter the amount to deduct, or clear that field.'; return; }
+  updateSale(id, {date:date,customer:customer,description:description,amount:amount,receivedNative:received,accountId:accountId,dueDate:dueDate,notes:notes,payAccountId:payAccountId,payNative:payNative});
+  toast('Sale updated','success');
+  closeModal();
+  navigateTo(currentPage);
+}
+
+/* ---- Edit: Purchase ---- */
+function openEditPurchaseModal(id){
+  const p = state.purchases.find(function(x){ return x.id===id; }); if(!p) return;
+  const body =
+    '<div class="form-grid">'+
+      '<div class="field"><label>Date</label><input type="date" id="ePDate" value="'+p.date+'"></div>'+
+      '<div class="field"><label>Supplier Name</label><input type="text" id="ePSupplier" value="'+escapeHtml(p.supplier)+'"></div>'+
+      '<div class="field full"><label>Description</label><input type="text" id="ePDescription" value="'+escapeHtml(p.description||'')+'"></div>'+
+      '<div class="field"><label>Purchase Amount ('+baseCurrency()+')</label><input type="number" id="ePAmount" min="0" step="0.01" value="'+p.amount+'" oninput="editUpdatePurchasePreview()"></div>'+
+      '<div class="field"><label>Paid From</label><select id="ePAccount" onchange="editUpdatePurchasePreview()">'+acctOptions(p.accountId,null,'— Not paid yet (Credit) —')+'</select></div>'+
+      '<div class="field" id="ePPaidWrap" style="display:'+(p.accountId?'':'none')+'"><label>Amount Paid <span id="ePPaidCurLabel" class="text-dim"></span></label>'+
+        '<div class="inline-suffix"><input type="number" id="ePPaid" min="0" step="0.01" value="'+(p.paidNative||0)+'" oninput="editUpdatePurchasePreview()">'+
+        '<button type="button" class="btn btn-sm" onclick="editFillFullPurchase()">Full amount</button></div><div class="convert-note" id="ePConvertNote"></div></div>'+
+      '<div class="field"><label>Due Date <span class="text-dim">(optional)</span></label><input type="date" id="ePDueDate" value="'+(p.dueDate||'')+'"></div>'+
+      '<div class="field"><label>Receive Into <span class="text-dim">(asset exchange, optional)</span></label><select id="ePReceiveAccount" onchange="editUpdatePurchaseReceivePreview()">'+acctOptions(p.receiveAccountId,p.accountId,'— None —')+'</select></div>'+
+      '<div class="field" id="ePReceiveWrap" style="display:'+(p.receiveAccountId?'':'none')+'"><label>Receive Amount <span id="ePReceiveCurLabel" class="text-dim"></span></label><input type="number" id="ePReceiveAmount" min="0" step="0.0001" value="'+(p.receiveNative||0)+'" oninput="editUpdatePurchaseReceivePreview()"></div>'+
+      '<div class="field full" id="ePReceiveNoteWrap" style="display:none"><div class="convert-note" id="ePReceiveNote"></div></div>'+
+      '<div class="field full"><label>Notes</label><input type="text" id="ePNotes" value="'+escapeHtml(p.notes||'')+'"></div>'+
+    '</div><div class="error-text" id="ePError"></div>'+
+    '<div class="form-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitEditPurchase(\''+id+'\')">'+icon('check')+' Save Changes</button></div>';
+  openModal('Edit Purchase', body, true);
+  editUpdatePurchasePreview(); editUpdatePurchaseReceivePreview();
+}
+function editUpdatePurchasePreview(){
+  const accId = document.getElementById('ePAccount').value;
+  const wrap = document.getElementById('ePPaidWrap');
+  if(!accId){ wrap.style.display='none'; return; }
+  wrap.style.display='';
+  const acc = getAccount(accId);
+  document.getElementById('ePPaidCurLabel').textContent = '('+acc.currency+')';
+  const paid = Number(document.getElementById('ePPaid').value)||0;
+  document.getElementById('ePConvertNote').textContent = acc.currency!==baseCurrency() ? ('≈ '+fmtNPR(paid*acc.rate)+' at current rate '+fmtNum(acc.rate)) : '';
+}
+function editFillFullPurchase(){
+  const accId = document.getElementById('ePAccount').value; if(!accId) return;
+  const acc = getAccount(accId);
+  const amount = Number(document.getElementById('ePAmount').value)||0;
+  document.getElementById('ePPaid').value = (amount/(acc.rate||1)).toFixed(2);
+  editUpdatePurchasePreview();
+}
+function editUpdatePurchaseReceivePreview(){
+  const accId = document.getElementById('ePReceiveAccount').value;
+  const wrap = document.getElementById('ePReceiveWrap'), noteWrap = document.getElementById('ePReceiveNoteWrap');
+  if(!accId){ wrap.style.display='none'; noteWrap.style.display='none'; return; }
+  wrap.style.display='';
+  const acc = getAccount(accId);
+  document.getElementById('ePReceiveCurLabel').textContent = '('+acc.currency+')';
+  const receiveNative = Number(document.getElementById('ePReceiveAmount').value)||0;
+  if(receiveNative>0){ noteWrap.style.display=''; document.getElementById('ePReceiveNote').textContent = '≈ '+fmtNPR(receiveNative*acc.rate)+' worth received into '+acc.name+' at current rate.'; }
+  else { noteWrap.style.display='none'; }
+}
+function submitEditPurchase(id){
+  const date=document.getElementById('ePDate').value;
+  const supplier=document.getElementById('ePSupplier').value.trim();
+  const description=document.getElementById('ePDescription').value;
+  const amount=Number(document.getElementById('ePAmount').value);
+  const accountId=document.getElementById('ePAccount').value || null;
+  const paid=accountId?(Number(document.getElementById('ePPaid').value)||0):0;
+  const dueDate=document.getElementById('ePDueDate').value;
+  const notes=document.getElementById('ePNotes').value;
+  const receiveAccountId=document.getElementById('ePReceiveAccount').value || null;
+  const receiveNative=receiveAccountId?(Number(document.getElementById('ePReceiveAmount').value)||0):0;
+  const err=document.getElementById('ePError');
+  if(!date||!supplier||!amount||amount<=0){ err.textContent='Please fill in date, supplier name and a valid purchase amount.'; return; }
+  if(paid<0){ err.textContent='Paid amount cannot be negative.'; return; }
+  if(receiveAccountId){
+    if(!accountId){ err.textContent='A "Receive Into" purchase needs a "Paid From" account too.'; return; }
+    if(paid<=0){ err.textContent='Please enter the amount paid for this exchange.'; return; }
+    if(receiveNative<=0){ err.textContent='Please enter the amount received.'; return; }
+    if(receiveAccountId===accountId){ err.textContent='"Paid From" and "Receive Into" must be different accounts.'; return; }
+  }
+  updatePurchase(id, {date:date,supplier:supplier,description:description,amount:amount,paidNative:paid,accountId:accountId,dueDate:dueDate,notes:notes,receiveAccountId:receiveAccountId,receiveNative:receiveNative});
+  toast('Purchase updated','success');
+  closeModal();
+  navigateTo(currentPage);
+}
+
+/* ---- Edit: Credit ---- */
+let editSelectedCreditType='given';
+function openEditCreditModal(id){
+  const c = state.credits.find(function(x){ return x.id===id; }); if(!c) return;
+  editSelectedCreditType = c.type;
+  const body =
+    '<div class="field full" style="margin-bottom:14px"><label>Type</label><div class="radio-row" id="eCTypeRow">'+
+      '<div class="radio-pill '+(c.type==='given'?'on':'')+'" data-v="given" onclick="editSelectCreditType(\'given\')">You Gave</div>'+
+      '<div class="radio-pill '+(c.type==='taken'?'on':'')+'" data-v="taken" onclick="editSelectCreditType(\'taken\')">You Took</div></div></div>'+
+    '<div class="form-grid">'+
+      '<div class="field"><label>Date</label><input type="date" id="eCDate" value="'+c.date+'"></div>'+
+      '<div class="field"><label>Party Name</label><input type="text" id="eCParty" value="'+escapeHtml(c.party)+'"></div>'+
+      '<div class="field"><label>Amount ('+baseCurrency()+')</label><input type="number" id="eCAmount" min="0" step="0.01" value="'+c.amount+'" oninput="editUpdateCreditPreview()"></div>'+
+      '<div class="field"><label>Account <span class="text-dim">(optional)</span></label><select id="eCAccount" onchange="editUpdateCreditPreview()">'+acctOptions(c.accountId,null,'— No account —')+'</select></div>'+
+      '<div class="field"><label>Due Date</label><input type="date" id="eCDueDate" value="'+(c.dueDate||'')+'"></div>'+
+      '<div class="field"><label>Notes</label><input type="text" id="eCNotes" value="'+escapeHtml(c.notes||'')+'"></div>'+
+    '</div><div class="convert-note" id="eCConvertNote" style="margin-top:6px"></div>'+
+    '<div class="error-text" id="eCError"></div>'+
+    '<div class="form-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitEditCredit(\''+id+'\')">'+icon('check')+' Save Changes</button></div>';
+  openModal('Edit Credit', body);
+  editUpdateCreditPreview();
+}
+function editSelectCreditType(t){ editSelectedCreditType=t; document.querySelectorAll('#eCTypeRow .radio-pill').forEach(function(p){ p.classList.toggle('on', p.dataset.v===t); }); editUpdateCreditPreview(); }
+function editUpdateCreditPreview(){
+  const accId=document.getElementById('eCAccount').value;
+  const note=document.getElementById('eCConvertNote');
+  if(!accId){ note.textContent=''; return; }
+  const acc=getAccount(accId);
+  const amount=Number(document.getElementById('eCAmount').value)||0;
+  if(acc.currency===baseCurrency()){ note.textContent=''; return; }
+  note.textContent = 'Equivalent to '+fmtNative(amount/(acc.rate||1), acc.currency)+' moving '+(editSelectedCreditType==='given'?'out of ':'into ')+acc.name+' at current rate '+fmtNum(acc.rate);
+}
+function submitEditCredit(id){
+  const date=document.getElementById('eCDate').value;
+  const party=document.getElementById('eCParty').value.trim();
+  const amount=Number(document.getElementById('eCAmount').value);
+  const accountId=document.getElementById('eCAccount').value||null;
+  const dueDate=document.getElementById('eCDueDate').value;
+  const notes=document.getElementById('eCNotes').value;
+  const err=document.getElementById('eCError');
+  if(!date||!party||!amount||amount<=0){ err.textContent='Please fill in date, party name and a valid amount.'; return; }
+  updateCredit(id, {type:editSelectedCreditType, party:party, amount:amount, accountId:accountId, date:date, dueDate:dueDate, notes:notes});
+  toast('Credit entry updated','success');
+  closeModal();
+  navigateTo(currentPage);
+}
+
+/* ---- Edit: Cash In/Out ---- */
+function openEditCashTxModal(id){
+  const t = state.cashTx.find(function(x){ return x.id===id; }); if(!t) return;
+  const presets = t.kind==='in'?CASH_IN_PRESETS:CASH_OUT_PRESETS;
+  const custom = state.customCategories[t.kind]||[];
+  const all = presets.concat(custom);
+  const isKnown = all.indexOf(t.category)!==-1;
+  const opts = all.map(function(c){ return '<option value="'+escapeHtml(c)+'" '+(c===t.category?'selected':'')+'>'+escapeHtml(c)+'</option>'; }).join('');
+  const body =
+    '<div class="form-grid">'+
+      '<div class="field"><label>Type</label><div class="radio-row"><div class="radio-pill '+(t.kind==='in'?'on':'')+'" style="pointer-events:none">'+(t.kind==='in'?'Cash In':'Cash Out')+'</div></div></div>'+
+      '<div class="field"><label>Date</label><input type="date" id="eCtxDate" value="'+t.date+'"></div>'+
+      '<div class="field"><label>Account</label><select id="eCtxAccount" onchange="updateCurLabelAndConvert(\'eCtxAccount\',\'eCtxCurLabel\',\'eCtxAmount\',\'eCtxConvertNote\')">'+acctOptions(t.accountId,null,'Select account')+'</select></div>'+
+      '<div class="field"><label>Category</label><select id="eCtxCategory" onchange="onCategoryChange(\'eCtxCategory\')">'+opts+'<option value="__other__" '+(!isKnown?'selected':'')+'>Other (type your own)</option></select>'+
+        '<input type="text" id="eCtxCategoryCustom" placeholder="Enter category name" style="display:'+(isKnown?'none':'')+'; margin-top:8px" value="'+(isKnown?'':escapeHtml(t.category))+'"></div>'+
+      '<div class="field"><label>Amount <span id="eCtxCurLabel" class="text-dim"></span></label><input type="number" id="eCtxAmount" min="0" step="0.01" value="'+t.amount+'" oninput="updateCurLabelAndConvert(\'eCtxAccount\',\'eCtxCurLabel\',\'eCtxAmount\',\'eCtxConvertNote\')"></div>'+
+      '<div class="field full"><label>Note</label><input type="text" id="eCtxNote" value="'+escapeHtml(t.note||'')+'"></div>'+
+    '</div><div class="convert-note" id="eCtxConvertNote"></div>'+
+    '<div class="error-text" id="eCtxError"></div>'+
+    '<div class="form-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitEditCashTx(\''+id+'\',\''+t.kind+'\')">'+icon('check')+' Save Changes</button></div>';
+  openModal('Edit Cash '+(t.kind==='in'?'In':'Out'), body);
+  updateCurLabelAndConvert('eCtxAccount','eCtxCurLabel','eCtxAmount','eCtxConvertNote');
+}
+function submitEditCashTx(id, kind){
+  const date=document.getElementById('eCtxDate').value;
+  const accountId=document.getElementById('eCtxAccount').value;
+  const category=resolveCategory('eCtxCategory');
+  const amount=Number(document.getElementById('eCtxAmount').value);
+  const note=document.getElementById('eCtxNote').value;
+  const err=document.getElementById('eCtxError');
+  if(!date||!accountId){ err.textContent='Please select a date and account.'; return; }
+  if(!category){ err.textContent='Please choose or enter a category.'; return; }
+  if(!amount||amount<=0){ err.textContent='Please enter a valid amount greater than 0.'; return; }
+  updateCashTx(id, {kind:kind,date:date,accountId:accountId,category:category,amount:amount,note:note});
+  toast('Transaction updated','success');
+  closeModal();
+  navigateTo(currentPage);
+}
+
+/* ---- Edit: Transfer ---- */
+let editTransferManuallyEdited=false;
+function openEditTransferModal(id){
+  const t = state.transfers.find(function(x){ return x.id===id; }); if(!t) return;
+  editTransferManuallyEdited = true; // keep both amounts exactly as originally recorded until the user changes something
+  const body =
+    '<div class="form-grid">'+
+      '<div class="field"><label>Date</label><input type="date" id="eTDate" value="'+t.date+'"></div>'+
+      '<div class="field"></div>'+
+      '<div class="field"><label>From Account</label><select id="eTFrom" onchange="editOnTransferChange()">'+acctOptions(t.fromAccountId,null,'Select account')+'</select></div>'+
+      '<div class="field"><label>To Account</label><select id="eTTo" onchange="editOnTransferChange()">'+acctOptions(t.toAccountId,null,'Select account')+'</select></div>'+
+      '<div class="field"><label>Amount to Send <span id="eTFromCurLabel" class="text-dim"></span></label><input type="number" id="eTFromAmount" min="0" step="0.01" value="'+t.fromAmount+'" oninput="editOnTransferChange()"></div>'+
+      '<div class="field"><label>Amount to Receive <span id="eTToCurLabel" class="text-dim"></span></label><input type="number" id="eTToAmount" min="0" step="0.01" value="'+t.toAmount+'" oninput="editOnTransferAmountManualEdit()"></div>'+
+      '<div class="field full"><label>Note</label><input type="text" id="eTNote" value="'+escapeHtml(t.note||'')+'"></div>'+
+    '</div><div class="convert-note" id="eTConvertNote" style="margin-top:6px"></div>'+
+    '<div class="error-text" id="eTError"></div>'+
+    '<div class="form-actions"><button class="btn btn-ghost" onclick="closeModal()">Cancel</button><button class="btn btn-primary" onclick="submitEditTransfer(\''+id+'\')">'+icon('check')+' Save Changes</button></div>';
+  openModal('Edit Transfer', body, true);
+  editRecalcTransferPreview();
+}
+function editOnTransferChange(){ editTransferManuallyEdited=false; editRecalcTransferPreview(); }
+function editOnTransferAmountManualEdit(){ editTransferManuallyEdited=true; editRecalcTransferPreview(); }
+function editRecalcTransferPreview(){
+  const fromId=document.getElementById('eTFrom').value, toId=document.getElementById('eTTo').value;
+  const fromAcc=getAccount(fromId), toAcc=getAccount(toId);
+  document.getElementById('eTFromCurLabel').textContent = fromAcc?('('+fromAcc.currency+')'):'';
+  document.getElementById('eTToCurLabel').textContent = toAcc?('('+toAcc.currency+')'):'';
+  const fromAmount=Number(document.getElementById('eTFromAmount').value)||0;
+  const note=document.getElementById('eTConvertNote');
+  if(!fromAcc||!toAcc){ note.textContent=''; return; }
+  if(!editTransferManuallyEdited){
+    const nprValue = fromAmount*fromAcc.rate;
+    const autoTo = toAcc.rate ? nprValue/toAcc.rate : 0;
+    document.getElementById('eTToAmount').value = autoTo ? autoTo.toFixed(2) : '';
+  }
+  const toAmount=Number(document.getElementById('eTToAmount').value)||0;
+  const sentNPR=fromAmount*fromAcc.rate, recvNPR=toAmount*toAcc.rate;
+  const diff=sentNPR-recvNPR;
+  if(Math.abs(diff)<0.5){ note.innerHTML = (fromAcc.currency!==toAcc.currency) ? ('Fair value at current rates ≈ '+fmtNPR(sentNPR)) : ''; }
+  else if(diff>0){ note.innerHTML = 'Sending ≈ '+fmtNPR(sentNPR)+', receiving ≈ '+fmtNPR(recvNPR)+' — <strong style="color:var(--red)">'+fmtNPR(diff)+' fee/loss</strong>'; }
+  else { note.innerHTML = 'Sending ≈ '+fmtNPR(sentNPR)+', receiving ≈ '+fmtNPR(recvNPR)+' — <strong style="color:var(--green)">'+fmtNPR(-diff)+' exchange gain</strong>'; }
+}
+function submitEditTransfer(id){
+  const date=document.getElementById('eTDate').value;
+  const fromAccountId=document.getElementById('eTFrom').value, toAccountId=document.getElementById('eTTo').value;
+  const fromAmount=Number(document.getElementById('eTFromAmount').value);
+  const toAmount=Number(document.getElementById('eTToAmount').value);
+  const note=document.getElementById('eTNote').value;
+  const err=document.getElementById('eTError');
+  if(!date||!fromAccountId||!toAccountId){ err.textContent='Please select a date, from account and to account.'; return; }
+  if(fromAccountId===toAccountId){ err.textContent='From and To accounts must be different.'; return; }
+  if(!fromAmount||fromAmount<=0||!toAmount||toAmount<=0){ err.textContent='Please enter valid amounts greater than 0.'; return; }
+  updateTransfer(id, {date:date,fromAccountId:fromAccountId,toAccountId:toAccountId,fromAmount:fromAmount,toAmount:toAmount,note:note});
+  toast('Transfer updated','success');
+  closeModal();
+  navigateTo(currentPage);
 }
 
 /* ============================================================
@@ -2020,9 +2525,9 @@ function recentSalesHtml(){
   const list = state.sales.slice().sort(function(a,b){ return (b.createdAt||'').localeCompare(a.createdAt||''); }).slice(0,8);
   const rows = list.map(function(s){
     const st = saleStatus(s);
-    return '<tr><td>'+fmtDate(s.date)+'</td><td>'+escapeHtml(s.customer)+'</td><td class="num">'+fmtNPR(s.amount)+'</td>'+
+    return '<tr class="clickable-row" onclick="openTransactionDetail(\'sale\',\''+s.id+'\')"><td>'+fmtDate(s.date)+'</td><td>'+escapeHtml(s.customer)+'</td><td class="num">'+fmtNPR(s.amount)+'</td>'+
       '<td><span class="badge '+stMap[st]+'">'+st+'</span></td>'+
-      '<td><button class="btn btn-ghost btn-sm" onclick="deleteRecordConfirm(\'sale\',\''+s.id+'\')">'+icon('trash')+'</button></td></tr>';
+      '<td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); deleteRecordConfirm(\'sale\',\''+s.id+'\')">'+icon('trash')+'</button></td></tr>';
   }).join('');
   return '<div class="card"><div class="section-head"><h2>Recent Sales</h2></div><div class="table-wrap"><table>'+
     '<thead><tr><th>Date</th><th>Customer</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead>'+
@@ -2131,9 +2636,9 @@ function recentPurchasesHtml(){
   const list = state.purchases.slice().sort(function(a,b){ return (b.createdAt||'').localeCompare(a.createdAt||''); }).slice(0,8);
   const rows = list.map(function(p){
     const st = purchaseStatus(p);
-    return '<tr><td>'+fmtDate(p.date)+'</td><td>'+escapeHtml(p.supplier)+'</td><td class="num">'+fmtNPR(p.amount)+'</td>'+
+    return '<tr class="clickable-row" onclick="openTransactionDetail(\'purchase\',\''+p.id+'\')"><td>'+fmtDate(p.date)+'</td><td>'+escapeHtml(p.supplier)+'</td><td class="num">'+fmtNPR(p.amount)+'</td>'+
       '<td><span class="badge '+stMap[st]+'">'+st+'</span></td>'+
-      '<td><button class="btn btn-ghost btn-sm" onclick="deleteRecordConfirm(\'purchase\',\''+p.id+'\')">'+icon('trash')+'</button></td></tr>';
+      '<td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); deleteRecordConfirm(\'purchase\',\''+p.id+'\')">'+icon('trash')+'</button></td></tr>';
   }).join('');
   return '<div class="card"><div class="section-head"><h2>Recent Purchases</h2></div><div class="table-wrap"><table>'+
     '<thead><tr><th>Date</th><th>Supplier</th><th class="num">Amount</th><th>Status</th><th></th></tr></thead>'+
@@ -2194,10 +2699,10 @@ function recentCreditsHtml(){
   const list = state.credits.slice().sort(function(a,b){ return (b.createdAt||'').localeCompare(a.createdAt||''); }).slice(0,8);
   const rows = list.map(function(c){
     const due = creditDue(c);
-    return '<tr><td>'+fmtDate(c.date)+'</td><td>'+escapeHtml(c.party)+'</td>'+
+    return '<tr class="clickable-row" onclick="openTransactionDetail(\'credit\',\''+c.id+'\')"><td>'+fmtDate(c.date)+'</td><td>'+escapeHtml(c.party)+'</td>'+
       '<td><span class="badge '+(c.type==='given'?'badge-green':'badge-red')+'">'+(c.type==='given'?'Given':'Taken')+'</span></td>'+
       '<td class="num">'+fmtNPR(c.amount)+'</td><td class="num">'+fmtNPR(Math.max(0,due))+'</td>'+
-      '<td><button class="btn btn-ghost btn-sm" onclick="deleteRecordConfirm(\'credit\',\''+c.id+'\')">'+icon('trash')+'</button></td></tr>';
+      '<td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); deleteRecordConfirm(\'credit\',\''+c.id+'\')">'+icon('trash')+'</button></td></tr>';
   }).join('');
   return '<div class="card"><div class="section-head"><h2>Recent Credit Entries</h2></div><div class="table-wrap"><table>'+
     '<thead><tr><th>Date</th><th>Party</th><th>Type</th><th class="num">Amount</th><th class="num">Due</th><th></th></tr></thead>'+
@@ -2370,14 +2875,14 @@ function cashTxListHtml(kind){
   const list=state.cashTx.filter(function(t){ return t.kind===kind; }).sort(function(a,b){ return (b.createdAt||'').localeCompare(a.createdAt||''); }).slice(0,10);
   const rows = list.map(function(t){
     const acc=getAccount(t.accountId);
-    return '<tr><td>'+fmtDate(t.date)+'</td><td>'+(acc?escapeHtml(acc.name):'<span class="text-dim">Deleted account</span>')+'</td>'+
+    return '<tr class="clickable-row" onclick="openTransactionDetail(\'cashTx\',\''+t.id+'\')"><td>'+fmtDate(t.date)+'</td><td>'+(acc?escapeHtml(acc.name):'<span class="text-dim">Deleted account</span>')+'</td>'+
       '<td>'+escapeHtml(t.category)+'</td><td class="num">'+(acc?fmtNative(t.amount,acc.currency):fmtNum(t.amount))+'</td>'+
       '<td class="num text-dim">'+(acc&&acc.currency!==baseCurrency()?fmtNPR(cashTxNPR(t)):'')+'</td>'+
       '<td>'+escapeHtml(t.note||'')+'</td>'+
-      '<td><button class="btn btn-ghost btn-sm" onclick="deleteRecordConfirm(\'cashTx\',\''+t.id+'\')">'+icon('trash')+'</button></td></tr>';
+      '<td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); deleteRecordConfirm(\'cashTx\',\''+t.id+'\')">'+icon('trash')+'</button></td></tr>';
   }).join('');
   return '<div class="card"><div class="section-head"><h2>Recent Cash '+(kind==='in'?'In':'Out')+'</h2></div><div class="table-wrap"><table>'+
-    '<thead><tr><th>Date</th><th>Account</th><th>Category</th><th class="num">Amount</th><th class="num">≈ NPR</th><th>Note</th><th></th></tr></thead>'+
+    '<thead><tr><th>Date</th><th>Account</th><th>Category</th><th class="num">Amount</th><th class="num">≈ '+baseCurrency()+'</th><th>Note</th><th></th></tr></thead>'+
     '<tbody>'+(rows||'<tr class="empty-row"><td colspan="7">No entries yet.</td></tr>')+'</tbody></table></div></div>';
 }
 function transferListHtml(){
@@ -2385,11 +2890,11 @@ function transferListHtml(){
   const rows=list.map(function(t){
     const fromAcc=getAccount(t.fromAccountId), toAcc=getAccount(t.toAccountId);
     const fee=transferFeeNPR(t);
-    return '<tr><td>'+fmtDate(t.date)+'</td><td>'+(fromAcc?escapeHtml(fromAcc.name):'—')+' → '+(toAcc?escapeHtml(toAcc.name):'—')+'</td>'+
+    return '<tr class="clickable-row" onclick="openTransactionDetail(\'transfer\',\''+t.id+'\')"><td>'+fmtDate(t.date)+'</td><td>'+(fromAcc?escapeHtml(fromAcc.name):'—')+' → '+(toAcc?escapeHtml(toAcc.name):'—')+'</td>'+
       '<td class="num">'+(fromAcc?fmtNative(t.fromAmount,fromAcc.currency):fmtNum(t.fromAmount))+'</td>'+
       '<td class="num">'+(toAcc?fmtNative(t.toAmount,toAcc.currency):fmtNum(t.toAmount))+'</td>'+
       '<td class="num '+(fee>0.004?'text-red':(fee<-0.004?'text-green':''))+'">'+(Math.abs(fee)>0.004?fmtNPR(fee):'—')+'</td>'+
-      '<td><button class="btn btn-ghost btn-sm" onclick="deleteRecordConfirm(\'transfer\',\''+t.id+'\')">'+icon('trash')+'</button></td></tr>';
+      '<td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); deleteRecordConfirm(\'transfer\',\''+t.id+'\')">'+icon('trash')+'</button></td></tr>';
   }).join('');
   return '<div class="card"><div class="section-head"><h2>Recent Transfers</h2></div><div class="table-wrap"><table>'+
     '<thead><tr><th>Date</th><th>Route</th><th class="num">Sent</th><th class="num">Received</th><th class="num">Fee/Gain</th><th></th></tr></thead>'+
@@ -2426,7 +2931,7 @@ function renderSalesReportBody(){
   const stMap={paid:'badge-green',partial:'badge-gold',credit:'badge-red'};
   const rows=list.map(function(s){
     const acc=s.accountId?getAccount(s.accountId):null;
-    return '<tr><td>'+fmtDate(s.date)+'</td><td>'+escapeHtml(s.customer)+'</td><td>'+escapeHtml(s.description||'')+'</td>'+
+    return '<tr class="clickable-row" onclick="openTransactionDetail(\'sale\',\''+s.id+'\')"><td>'+fmtDate(s.date)+'</td><td>'+escapeHtml(s.customer)+'</td><td>'+escapeHtml(s.description||'')+'</td>'+
       '<td>'+(acc?escapeHtml(acc.name):'<span class="text-dim">—</span>')+'</td>'+
       '<td class="num">'+fmtNPR(s.amount)+'</td><td class="num">'+fmtNPR(Math.max(0,saleDue(s)))+'</td>'+
       '<td><span class="badge '+stMap[saleStatus(s)]+'">'+saleStatus(s)+'</span></td></tr>';
@@ -2481,7 +2986,7 @@ function renderPurchaseReportBody(){
   const stMap={paid:'badge-green',partial:'badge-gold',credit:'badge-red'};
   const rows=list.map(function(p){
     const acc=p.accountId?getAccount(p.accountId):null;
-    return '<tr><td>'+fmtDate(p.date)+'</td><td>'+escapeHtml(p.supplier)+'</td><td>'+escapeHtml(p.description||'')+'</td>'+
+    return '<tr class="clickable-row" onclick="openTransactionDetail(\'purchase\',\''+p.id+'\')"><td>'+fmtDate(p.date)+'</td><td>'+escapeHtml(p.supplier)+'</td><td>'+escapeHtml(p.description||'')+'</td>'+
       '<td>'+(acc?escapeHtml(acc.name):'<span class="text-dim">—</span>')+'</td>'+
       '<td class="num">'+fmtNPR(p.amount)+'</td><td class="num">'+fmtNPR(Math.max(0,purchaseDue(p)))+'</td>'+
       '<td><span class="badge '+stMap[purchaseStatus(p)]+'">'+purchaseStatus(p)+'</span></td></tr>';
@@ -2588,10 +3093,10 @@ function dueTableHtml(list, tone){
   const today=todayISO();
   const rows=list.slice().sort(function(a,b){ return (a.dueDate||'9999')<(b.dueDate||'9999')?-1:1; }).map(function(r){
     const overdue = r.dueDate && r.dueDate<today;
-    return '<tr><td>'+escapeHtml(r.party)+'</td><td>'+fmtDate(r.date)+'</td>'+
+    return '<tr class="clickable-row" onclick="openTransactionDetail(\''+r.refType+'\',\''+r.refId+'\')"><td>'+escapeHtml(r.party)+'</td><td>'+fmtDate(r.date)+'</td>'+
       '<td>'+(r.dueDate?fmtDate(r.dueDate):'—')+' '+(overdue?'<span class="badge badge-red">Overdue</span>':'')+'</td>'+
       '<td class="num">'+fmtNPR(r.total)+'</td><td class="num" style="color:var(--'+tone+')">'+fmtNPR(r.remaining)+'</td>'+
-      '<td><button class="btn btn-sm btn-primary" onclick="openSettleModal(\''+r.refType+'\',\''+r.refId+'\')">Record Payment</button></td></tr>';
+      '<td><button class="btn btn-sm btn-primary" onclick="event.stopPropagation(); openSettleModal(\''+r.refType+'\',\''+r.refId+'\')">Record Payment</button></td></tr>';
   }).join('');
   return '<div class="table-wrap"><table><thead><tr><th>Party</th><th>Date</th><th>Due Date</th><th class="num">Total</th><th class="num">Remaining</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div>';
 }
