@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>QwikGold Limited — Accounting Ledger</title>
+<title>Khata — Accounting Ledger</title>
 <style>
 /* ============================================================
    DESIGN TOKENS
@@ -688,19 +688,23 @@ function activeAccounts(){ return state.accounts.filter(function(a){ return !a.a
 // anything that has already happened - only for current/"as of today" valuation.
 function snapOr(recordRate, acc){ return (recordRate!=null && recordRate>0) ? recordRate : (acc?acc.rate:1); }
 
-function accountBalanceNative(accountId){
+function accountBalanceNative(accountId, asOfDate){
   const acc = getAccount(accountId);
   if(!acc) return 0;
+  const inRange = function(d){ return !asOfDate || d<=asOfDate; };
   let bal = Number(acc.balance)||0;
   state.sales.forEach(function(s){
+    if(!inRange(s.date)) return;
     if(s.accountId===accountId) bal += (Number(s.receivedNative)||0);
     if(s.payAccountId===accountId) bal -= (Number(s.payNative)||0);
   });
   state.purchases.forEach(function(p){
+    if(!inRange(p.date)) return;
     if(p.accountId===accountId) bal -= (Number(p.paidNative)||0);
     if(p.receiveAccountId===accountId) bal += (Number(p.receiveNative)||0);
   });
   state.credits.forEach(function(c){
+    if(!inRange(c.date)) return;
     if(c.accountId===accountId){
       const rate = snapOr(c.accountRateSnap, acc);
       const nativeMoved = (c.accountNative!=null) ? c.accountNative : (Number(c.amount)||0) / (rate||1);
@@ -708,15 +712,18 @@ function accountBalanceNative(accountId){
     }
   });
   state.cashTx.forEach(function(t){
+    if(!inRange(t.date)) return;
     if(t.accountId!==accountId) return;
     if(t.kind==='in') bal += (Number(t.amount)||0);
     if(t.kind==='out') bal -= (Number(t.amount)||0);
   });
   state.transfers.forEach(function(t){
+    if(!inRange(t.date)) return;
     if(t.fromAccountId===accountId) bal -= (Number(t.fromAmount)||0);
     if(t.toAccountId===accountId) bal += (Number(t.toAmount)||0);
   });
   state.settlements.forEach(function(st){
+    if(!inRange(st.date)) return;
     if(st.accountId!==accountId) return;
     if(st.refType==='sale') bal += (Number(st.amountNative)||0);
     if(st.refType==='purchase') bal -= (Number(st.amountNative)||0);
@@ -727,29 +734,33 @@ function accountBalanceNative(accountId){
   });
   return bal;
 }
-function accountBalanceNPR(accountId){
+function accountBalanceNPR(accountId, asOfDate){
   const acc = getAccount(accountId);
   if(!acc) return 0;
-  return accountBalanceNative(accountId) * acc.rate;
+  return accountBalanceNative(accountId, asOfDate) * acc.rate;
 }
 // Historical-cost value of everything that ever moved through this account, each event valued at
 // ITS OWN frozen snapshot rate (not today's rate). This is the "what did we actually record at the
 // time" view. The gap between this and the current mark-to-market value (accountBalanceNPR, which
 // uses today's live rate) is the account's unrealized FX gain/loss - a real, meaningful figure, not
 // an error. This is what keeps the Balance Sheet balancing while P&L stays permanently locked.
-function accountHistoricalCostNPR(accountId){
+function accountHistoricalCostNPR(accountId, asOfDate){
   const acc = getAccount(accountId);
   if(!acc) return 0;
+  const inRange = function(d){ return !asOfDate || d<=asOfDate; };
   let cost = (Number(acc.balance)||0) * (acc.openingRateSnapshot!=null ? acc.openingRateSnapshot : acc.rate);
   state.sales.forEach(function(s){
+    if(!inRange(s.date)) return;
     if(s.accountId===accountId) cost += (Number(s.receivedNative)||0) * snapOr(s.accountRateSnap, acc);
     if(s.payAccountId===accountId) cost -= (Number(s.payNative)||0) * snapOr(s.payAccountRateSnap, acc);
   });
   state.purchases.forEach(function(p){
+    if(!inRange(p.date)) return;
     if(p.accountId===accountId) cost -= (Number(p.paidNative)||0) * snapOr(p.accountRateSnap, acc);
     if(p.receiveAccountId===accountId) cost += (Number(p.receiveNative)||0) * snapOr(p.receiveAccountRateSnap, acc);
   });
   state.credits.forEach(function(c){
+    if(!inRange(c.date)) return;
     if(c.accountId===accountId){
       const rate = snapOr(c.accountRateSnap, acc);
       const native = (c.accountNative!=null) ? c.accountNative : (Number(c.amount)||0)/(rate||1);
@@ -757,16 +768,19 @@ function accountHistoricalCostNPR(accountId){
     }
   });
   state.cashTx.forEach(function(t){
+    if(!inRange(t.date)) return;
     if(t.accountId!==accountId) return;
     const rate = snapOr(t.rateSnap, acc);
     if(t.kind==='in') cost += (Number(t.amount)||0)*rate;
     if(t.kind==='out') cost -= (Number(t.amount)||0)*rate;
   });
   state.transfers.forEach(function(t){
+    if(!inRange(t.date)) return;
     if(t.fromAccountId===accountId) cost -= (Number(t.fromAmount)||0) * snapOr(t.fromRateSnap, acc);
     if(t.toAccountId===accountId) cost += (Number(t.toAmount)||0) * snapOr(t.toRateSnap, acc);
   });
   state.settlements.forEach(function(st){
+    if(!inRange(st.date)) return;
     if(st.accountId!==accountId) return;
     const rate = snapOr(st.rateSnap, acc);
     if(st.refType==='sale') cost += (Number(st.amountNative)||0)*rate;
@@ -778,28 +792,28 @@ function accountHistoricalCostNPR(accountId){
   });
   return cost;
 }
-function fxRevaluationForAccount(accountId){
-  return accountBalanceNPR(accountId) - accountHistoricalCostNPR(accountId);
+function fxRevaluationForAccount(accountId, asOfDate){
+  return accountBalanceNPR(accountId, asOfDate) - accountHistoricalCostNPR(accountId, asOfDate);
 }
-function totalFXRevaluation(){
-  return state.accounts.reduce(function(s,a){ return s + fxRevaluationForAccount(a.id); }, 0);
+function totalFXRevaluation(asOfDate){
+  return state.accounts.reduce(function(s,a){ return s + fxRevaluationForAccount(a.id, asOfDate); }, 0);
 }
-function settledNPRFor(refType, refId){
-  return state.settlements.filter(function(s){ return s.refType===refType && s.refId===refId; })
+function settledNPRFor(refType, refId, asOfDate){
+  return state.settlements.filter(function(s){ return s.refType===refType && s.refId===refId && (!asOfDate || s.date<=asOfDate); })
     .reduce(function(sum,s){ const acc=getAccount(s.accountId); return sum + (Number(s.amountNative)||0)*snapOr(s.rateSnap, acc); },0);
 }
-function saleDue(sale){
+function saleDue(sale, asOfDate){
   const acc = sale.accountId ? getAccount(sale.accountId) : null;
   const receivedNPR = (Number(sale.receivedNative)||0) * snapOr(sale.accountRateSnap, acc);
-  return (Number(sale.amount)||0) - receivedNPR - settledNPRFor('sale', sale.id);
+  return (Number(sale.amount)||0) - receivedNPR - settledNPRFor('sale', sale.id, asOfDate);
 }
-function purchaseDue(purchase){
+function purchaseDue(purchase, asOfDate){
   const acc = purchase.accountId ? getAccount(purchase.accountId) : null;
   const paidNPR = (Number(purchase.paidNative)||0) * snapOr(purchase.accountRateSnap, acc);
-  return (Number(purchase.amount)||0) - paidNPR - settledNPRFor('purchase', purchase.id);
+  return (Number(purchase.amount)||0) - paidNPR - settledNPRFor('purchase', purchase.id, asOfDate);
 }
-function creditDue(credit){
-  return (Number(credit.amount)||0) - settledNPRFor('credit', credit.id);
+function creditDue(credit, asOfDate){
+  return (Number(credit.amount)||0) - settledNPRFor('credit', credit.id, asOfDate);
 }
 function saleStatus(sale){
   const due = saleDue(sale);
@@ -846,22 +860,35 @@ function purchaseExchangeSpreadNPR(p){
   return (Number(p.amount)||0) - receiveNPR;
 }
 
-function calcCore(){
-  const totalSales = state.sales.reduce(function(s,x){ return s+(Number(x.amount)||0); },0);
-  const totalPurchases = state.purchases.reduce(function(s,x){ return s+(Number(x.amount)||0); },0);
+function calcCore(asOfDate){
+  const inRange = function(d){ return !asOfDate || d<=asOfDate; };
+  // Accounts are never excluded by their own createdAt here - only the DATED TRANSACTIONS are
+  // filtered by asOfDate below. Gating accounts by creation time would break the balance the moment
+  // someone backdates a transaction for an account they only just set up in the app (a normal
+  // workflow when entering historical data), since the transaction would count but the account
+  // holding it would silently disappear from the report.
+  const accountsAsOf = state.accounts;
+  const sales = asOfDate ? state.sales.filter(function(x){ return inRange(x.date); }) : state.sales;
+  const purchases = asOfDate ? state.purchases.filter(function(x){ return inRange(x.date); }) : state.purchases;
+  const credits = asOfDate ? state.credits.filter(function(x){ return inRange(x.date); }) : state.credits;
+  const cashTx = asOfDate ? state.cashTx.filter(function(x){ return inRange(x.date); }) : state.cashTx;
+  const transfers = asOfDate ? state.transfers.filter(function(x){ return inRange(x.date); }) : state.transfers;
+
+  const totalSales = sales.reduce(function(s,x){ return s+(Number(x.amount)||0); },0);
+  const totalPurchases = purchases.reduce(function(s,x){ return s+(Number(x.amount)||0); },0);
   // Purchases used to acquire another asset (e.g. buying USDT) are excluded from cost-of-goods,
   // since the value isn't consumed - it's just held in a different account.
-  const purchaseCostForPL = state.purchases.reduce(function(s,x){ return purchaseIsAssetExchange(x) ? s : s+(Number(x.amount)||0); },0);
+  const purchaseCostForPL = purchases.reduce(function(s,x){ return purchaseIsAssetExchange(x) ? s : s+(Number(x.amount)||0); },0);
   const purchaseAssetExchangeTotal = totalPurchases - purchaseCostForPL;
-  const capitalIn = state.cashTx.filter(isCapitalIn).reduce(function(s,t){ return s+cashTxNPR(t); },0);
-  const drawings = state.cashTx.filter(isDrawingsOut).reduce(function(s,t){ return s+cashTxNPR(t); },0);
-  const otherIncomeTx = state.cashTx.filter(function(t){ return t.kind==='in' && !isCapitalIn(t); }).reduce(function(s,t){ return s+cashTxNPR(t); },0);
-  const otherExpenseTx = state.cashTx.filter(function(t){ return t.kind==='out' && !isDrawingsOut(t); }).reduce(function(s,t){ return s+cashTxNPR(t); },0);
+  const capitalIn = cashTx.filter(isCapitalIn).reduce(function(s,t){ return s+cashTxNPR(t); },0);
+  const drawings = cashTx.filter(isDrawingsOut).reduce(function(s,t){ return s+cashTxNPR(t); },0);
+  const otherIncomeTx = cashTx.filter(function(t){ return t.kind==='in' && !isCapitalIn(t); }).reduce(function(s,t){ return s+cashTxNPR(t); },0);
+  const otherExpenseTx = cashTx.filter(function(t){ return t.kind==='out' && !isDrawingsOut(t); }).reduce(function(s,t){ return s+cashTxNPR(t); },0);
   let transferFee=0, transferGain=0;
-  state.transfers.forEach(function(t){ const d=transferFeeNPR(t); if(d>0.004) transferFee+=d; else if(d<-0.004) transferGain+=-d; });
+  transfers.forEach(function(t){ const d=transferFeeNPR(t); if(d>0.004) transferFee+=d; else if(d<-0.004) transferGain+=-d; });
   let purchaseExchangeFee=0, purchaseExchangeGain=0;
-  state.purchases.forEach(function(p){ const d=purchaseExchangeSpreadNPR(p); if(d>0.004) purchaseExchangeFee+=d; else if(d<-0.004) purchaseExchangeGain+=-d; });
-  const saleCogs = state.sales.reduce(function(s,x){ return s+saleCogsNPR(x); },0);
+  purchases.forEach(function(p){ const d=purchaseExchangeSpreadNPR(p); if(d>0.004) purchaseExchangeFee+=d; else if(d<-0.004) purchaseExchangeGain+=-d; });
+  const saleCogs = sales.reduce(function(s,x){ return s+saleCogsNPR(x); },0);
   const otherIncome = otherIncomeTx + transferGain + purchaseExchangeGain;
   const otherExpenses = otherExpenseTx + transferFee + purchaseExchangeFee + saleCogs;
   const netProfit = totalSales + otherIncome - purchaseCostForPL - otherExpenses;
@@ -869,15 +896,15 @@ function calcCore(){
   // opening balance corrected - NEVER the account's current rate, for the same reason sale/purchase
   // costs are frozen. The gap this creates versus each account's current mark-to-market value is
   // captured below as fxRevaluation, which is what keeps the Balance Sheet balancing.
-  const openingBalances = state.accounts.reduce(function(s,a){ return s+(Number(a.balance)||0)*(a.openingRateSnapshot!=null?a.openingRateSnapshot:a.rate); },0)
-    + state.credits.filter(function(c){ return !c.accountId; }).reduce(function(s,c){ return s+(c.type==='given'?(Number(c.amount)||0):-(Number(c.amount)||0)); },0);
-  const fxRevaluation = totalFXRevaluation();
-  const AR = state.sales.reduce(function(s,x){ return s+Math.max(0,saleDue(x)); },0)
-    + state.credits.filter(function(c){ return c.type==='given'; }).reduce(function(s,c){ return s+Math.max(0,creditDue(c)); },0);
-  const AP = state.purchases.reduce(function(s,x){ return s+Math.max(0,purchaseDue(x)); },0)
-    + state.credits.filter(function(c){ return c.type==='taken'; }).reduce(function(s,c){ return s+Math.max(0,creditDue(c)); },0);
+  const openingBalances = accountsAsOf.reduce(function(s,a){ return s+(Number(a.balance)||0)*(a.openingRateSnapshot!=null?a.openingRateSnapshot:a.rate); },0)
+    + credits.filter(function(c){ return !c.accountId; }).reduce(function(s,c){ return s+(c.type==='given'?(Number(c.amount)||0):-(Number(c.amount)||0)); },0);
+  const fxRevaluation = totalFXRevaluation(asOfDate);
+  const AR = sales.reduce(function(s,x){ return s+Math.max(0,saleDue(x,asOfDate)); },0)
+    + credits.filter(function(c){ return c.type==='given'; }).reduce(function(s,c){ return s+Math.max(0,creditDue(c,asOfDate)); },0);
+  const AP = purchases.reduce(function(s,x){ return s+Math.max(0,purchaseDue(x,asOfDate)); },0)
+    + credits.filter(function(c){ return c.type==='taken'; }).reduce(function(s,c){ return s+Math.max(0,creditDue(c,asOfDate)); },0);
   const totalEquity = openingBalances + capitalIn - drawings + netProfit + fxRevaluation;
-  const totalAccountsNPR = state.accounts.reduce(function(s,a){ return s+accountBalanceNPR(a.id); },0);
+  const totalAccountsNPR = accountsAsOf.reduce(function(s,a){ return s+accountBalanceNPR(a.id,asOfDate); },0);
   const totalAssets = totalAccountsNPR + AR;
   const totalLiabPlusEquity = AP + totalEquity;
   return {
@@ -986,20 +1013,23 @@ function calcProfitLoss(fromDate, toDate){
     incomeByCategory:incomeByCategory, expenseByCategory:expenseByCategory,
     totalOtherIncome:totalOtherIncome, totalOtherExpense:totalOtherExpense, totalRevenue:totalRevenue, totalExpense:totalExpense, netProfit:netProfit };
 }
-function calcBalanceSheet(){
-  const c = calcCore();
+function calcBalanceSheet(asOfDate){
+  const c = calcCore(asOfDate);
   return {
-    accounts: state.accounts.map(function(a){ return { id:a.id, name:a.name, currency:a.currency, balanceNative:accountBalanceNative(a.id), balanceNPR:accountBalanceNPR(a.id), archived:a.archived }; }),
+    accounts: state.accounts
+      .map(function(a){ return { id:a.id, name:a.name, currency:a.currency, balanceNative:accountBalanceNative(a.id,asOfDate), balanceNPR:accountBalanceNPR(a.id,asOfDate), archived:a.archived }; }),
     AR: c.AR, AP: c.AP, openingBalances: c.openingBalances, capitalIn: c.capitalIn, drawings: c.drawings, netProfit: c.netProfit, fxRevaluation: c.fxRevaluation,
     totalEquity: c.totalEquity, totalAssets: c.totalAssets, totalLiabPlusEquity: c.totalLiabPlusEquity, balanced: c.balanced,
   };
 }
-function calcTrialBalance(){
-  const c = calcCore();
-  const pl = calcProfitLoss();
+function calcTrialBalance(asOfDate){
+  const c = calcCore(asOfDate);
+  const pl = calcProfitLoss(null, asOfDate);
   const dr = [], cr = [];
-  state.accounts.filter(function(a){ return !a.archived || Math.abs(accountBalanceNPR(a.id))>0.004; }).forEach(function(a){
-    dr.push({ label:a.name+' ('+a.currency+')'+(a.archived?' (archived)':''), amount: accountBalanceNPR(a.id) });
+  state.accounts.filter(function(a){
+    return !a.archived || Math.abs(accountBalanceNPR(a.id,asOfDate))>0.004;
+  }).forEach(function(a){
+    dr.push({ label:a.name+' ('+a.currency+')'+(a.archived?' (archived)':''), amount: accountBalanceNPR(a.id,asOfDate) });
   });
   if(c.AR>0.004) dr.push({label:'Accounts Receivable', amount:c.AR});
   if(c.drawings>0.004) dr.push({label:'Drawings', amount:c.drawings});
@@ -1371,18 +1401,20 @@ function getReportPDFData(reportType){
     ]};
   }
   if(reportType==='trial'){
-    const tb = calcTrialBalance();
+    const range = currentAcctPeriodRange();
+    const tb = calcTrialBalance(range.to);
     const n = Math.max(tb.dr.length, tb.cr.length);
     const rows = [];
     for(let i=0;i<n;i++){ rows.push([tb.dr[i]?tb.dr[i].label:'', tb.dr[i]?fmtNPR(tb.dr[i].amount):'', tb.cr[i]?tb.cr[i].label:'', tb.cr[i]?fmtNPR(tb.cr[i].amount):'']); }
     rows.push(['TOTAL', fmtNPR(tb.totalDr), 'TOTAL', fmtNPR(tb.totalCr)]);
-    return { title:'Trial Balance', period:'As of '+fmtDate(today), sections:[
+    return { title:'Trial Balance', period:'As of '+fmtDate(range.to), sections:[
       { items:[{label:'Balanced', value: tb.balanced?'Yes':'NO — REVIEW REQUIRED'}] },
       { heading:'Trial Balance', headers:['Debit','Amount','Credit','Amount'], colWidths:[150,105,150,110], rows:rows },
     ]};
   }
   if(reportType==='pl'){
-    const pl = calcProfitLoss();
+    const range = currentAcctPeriodRange();
+    const pl = calcProfitLoss(range.from, range.to);
     const items = [{label:'Sales Revenue', value:fmtNPR(pl.salesRevenue)}];
     Object.keys(pl.incomeByCategory).forEach(function(k){ items.push({label:k, value:fmtNPR(pl.incomeByCategory[k])}); });
     items.push({label:'Total Revenue', value:fmtNPR(pl.totalRevenue)});
@@ -1390,10 +1422,11 @@ function getReportPDFData(reportType){
     Object.keys(pl.expenseByCategory).forEach(function(k){ items.push({label:k, value:fmtNPR(pl.expenseByCategory[k])}); });
     items.push({label:'Total Expenses', value:fmtNPR(pl.totalExpense)});
     items.push({label:(pl.netProfit>=0?'Net Profit':'Net Loss'), value:fmtNPR(Math.abs(pl.netProfit))});
-    return { title:'Profit & Loss Statement', period:'All Time', sections:[ { items:items } ]};
+    return { title:'Profit & Loss Statement', period:'For '+fmtDate(range.from)+' – '+fmtDate(range.to), sections:[ { items:items } ]};
   }
   if(reportType==='bs'){
-    const bs = calcBalanceSheet();
+    const range = currentAcctPeriodRange();
+    const bs = calcBalanceSheet(range.to);
     const items = [];
     bs.accounts.filter(function(a){ return !a.archived || Math.abs(a.balanceNPR)>0.004; }).forEach(function(a){ items.push({label:a.name+' ('+a.currency+')', value:fmtNPR(a.balanceNPR)}); });
     items.push({label:'Accounts Receivable', value:fmtNPR(bs.AR)});
@@ -1407,7 +1440,7 @@ function getReportPDFData(reportType){
     items2.push({label:'Unrealized FX Gain/Loss', value:fmtNPR(bs.fxRevaluation)});
     items2.push({label:'TOTAL EQUITY', value:fmtNPR(bs.totalEquity)});
     items2.push({label:'TOTAL LIABILITIES + EQUITY', value:fmtNPR(bs.totalLiabPlusEquity)});
-    return { title:'Balance Sheet', period:'As of '+fmtDate(today), sections:[
+    return { title:'Balance Sheet', period:'As of '+fmtDate(range.to), sections:[
       { items:[{label:'Balanced', value: bs.balanced?'Yes':'NO — REVIEW REQUIRED'}] },
       { heading:'Assets', items:items },
       { heading:'Liabilities & Equity', items:items2 },
@@ -1694,6 +1727,7 @@ const PAGE_META = {
 };
 let currentPage = 'dashboard';
 let activeTabs = { newentry:'sale', cashtx:'in', accountReports:'trial' };
+window.activeTabs = activeTabs;
 
 function renderNav(){
   let html='';
@@ -3157,6 +3191,58 @@ function submitSettlement(refType, refId, remaining){
 /* ============================================================
    ACCOUNT REPORTS: TRIAL BALANCE / P&L / BALANCE SHEET
    ============================================================ */
+let acctReportsPeriod = { preset:'current-month', customFrom:'', customTo:'' };
+window.acctReportsPeriod = acctReportsPeriod;
+function computePeriodRange(preset, customFrom, customTo){
+  const now = new Date();
+  function ymd(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+  function firstOfMonth(yy,mm){ return new Date(yy,mm,1); }
+  function lastOfMonth(yy,mm){ return new Date(yy,mm+1,0); }
+  const today = todayISO();
+  if(preset==='current-month') return { from: ymd(firstOfMonth(now.getFullYear(),now.getMonth())), to: today, label:'Current Month' };
+  if(preset==='previous-month'){
+    const pm = new Date(now.getFullYear(), now.getMonth()-1, 1);
+    return { from: ymd(firstOfMonth(pm.getFullYear(),pm.getMonth())), to: ymd(lastOfMonth(pm.getFullYear(),pm.getMonth())), label:'Previous Month' };
+  }
+  if(preset==='last-3-months') return { from: ymd(new Date(now.getFullYear(), now.getMonth()-2, 1)), to: today, label:'Last 3 Months' };
+  if(preset==='last-6-months') return { from: ymd(new Date(now.getFullYear(), now.getMonth()-5, 1)), to: today, label:'Last 6 Months' };
+  if(preset==='current-year') return { from: now.getFullYear()+'-01-01', to: today, label:'Current Year' };
+  if(preset==='custom') return { from: customFrom||today, to: customTo||today, label:'Custom Range' };
+  return { from: null, to: null, label:'All Time' };
+}
+function currentAcctPeriodRange(){
+  return computePeriodRange(acctReportsPeriod.preset, acctReportsPeriod.customFrom, acctReportsPeriod.customTo);
+}
+function periodSelectorHtml(){
+  const p = acctReportsPeriod;
+  const opts = [['current-month','Current Month'],['previous-month','Previous Month'],['last-3-months','Last 3 Months'],['last-6-months','Last 6 Months'],['current-year','Current Year'],['custom','Custom Date Range']];
+  const range = currentAcctPeriodRange();
+  return '<div class="filter-bar" style="margin-bottom:14px">'+
+    '<div class="field"><label>Report Period</label><select id="acctPeriodPreset" onchange="onAcctPeriodChange()">'+
+      opts.map(function(o){ return '<option value="'+o[0]+'" '+(p.preset===o[0]?'selected':'')+'>'+o[1]+'</option>'; }).join('')+
+    '</select></div>'+
+    (p.preset==='custom' ?
+      '<div class="field"><label>From</label><input type="date" id="acctPeriodFrom" value="'+(p.customFrom||range.from)+'" onchange="onAcctPeriodCustomChange()"></div>'+
+      '<div class="field"><label>To</label><input type="date" id="acctPeriodTo" value="'+(p.customTo||range.to)+'" onchange="onAcctPeriodCustomChange()"></div>'
+      : '')+
+    '<div style="align-self:center; font-size:12px; color:var(--text-faint)" class="mono">'+
+      (activeTabs.accountReports==='pl' ? 'For '+fmtDate(range.from)+' – '+fmtDate(range.to) : 'As of '+fmtDate(range.to))+
+    '</div></div>';
+}
+function onAcctPeriodChange(){
+  const preset = document.getElementById('acctPeriodPreset').value;
+  acctReportsPeriod.preset = preset;
+  if(preset==='custom' && !acctReportsPeriod.customFrom){
+    const r = computePeriodRange('current-month');
+    acctReportsPeriod.customFrom = r.from; acctReportsPeriod.customTo = r.to;
+  }
+  renderAccountReports();
+}
+function onAcctPeriodCustomChange(){
+  acctReportsPeriod.customFrom = document.getElementById('acctPeriodFrom').value;
+  acctReportsPeriod.customTo = document.getElementById('acctPeriodTo').value;
+  renderAcctReportBody();
+}
 function renderAccountReports(){
   const el=document.getElementById('page-account-reports');
   el.innerHTML=
@@ -3164,21 +3250,23 @@ function renderAccountReports(){
     '<div class="tab '+(activeTabs.accountReports==='trial'?'active':'')+'" onclick="switchAcctReportTab(\'trial\')">Trial Balance</div>'+
     '<div class="tab '+(activeTabs.accountReports==='pl'?'active':'')+'" onclick="switchAcctReportTab(\'pl\')">Profit &amp; Loss</div>'+
     '<div class="tab '+(activeTabs.accountReports==='bs'?'active':'')+'" onclick="switchAcctReportTab(\'bs\')">Balance Sheet</div>'+
-    '</div><div id="acctReportBody"></div>';
+    '</div>'+periodSelectorHtml()+'<div id="acctReportBody"></div>';
   renderAcctReportBody();
 }
 function switchAcctReportTab(t){ activeTabs.accountReports=t; renderAccountReports(); }
 function renderAcctReportBody(){
   const body=document.getElementById('acctReportBody');
-  if(activeTabs.accountReports==='trial') body.innerHTML=trialBalanceHtml();
-  if(activeTabs.accountReports==='pl') body.innerHTML=plHtml();
-  if(activeTabs.accountReports==='bs') body.innerHTML=balanceSheetHtml();
+  const range = currentAcctPeriodRange();
+  if(activeTabs.accountReports==='trial') body.innerHTML=trialBalanceHtml(range);
+  if(activeTabs.accountReports==='pl') body.innerHTML=plHtml(range);
+  if(activeTabs.accountReports==='bs') body.innerHTML=balanceSheetHtml(range);
 }
 function balanceCheckHtml(ok, label){
   return '<div class="balance-check '+(ok?'ok':'bad')+'">'+icon(ok?'check':'alert')+'<span>'+label+'</span></div>';
 }
-function trialBalanceHtml(){
-  const tb=calcTrialBalance();
+function trialBalanceHtml(range){
+  range = range || currentAcctPeriodRange();
+  const tb=calcTrialBalance(range.to);
   const n = Math.max(tb.dr.length, tb.cr.length);
   let bodyRows='';
   for(let i=0;i<n;i++){
@@ -3186,26 +3274,28 @@ function trialBalanceHtml(){
     bodyRows+='<tr><td>'+(d?escapeHtml(d.label):'')+'</td><td class="num">'+(d?fmtNPR(d.amount):'')+'</td>'+
       '<td>'+(c?escapeHtml(c.label):'')+'</td><td class="num">'+(c?fmtNPR(c.amount):'')+'</td></tr>';
   }
-  return printHeaderHtml('Trial Balance')+balanceCheckHtml(tb.balanced, tb.balanced?'Balanced — total debits equal total credits':'Not balanced — please review your entries')+
+  return printHeaderHtml('Trial Balance', 'As of '+fmtDate(range.to))+balanceCheckHtml(tb.balanced, tb.balanced?'Balanced — total debits equal total credits':'Not balanced — please review your entries')+
     '<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportTrialBalanceCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="downloadReportPDF(\'trial\')">'+icon('download')+' Download PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
     '<div class="table-wrap"><table><thead><tr><th>Debit</th><th class="num">Amount</th><th>Credit</th><th class="num">Amount</th></tr></thead>'+
     '<tbody>'+(bodyRows||'<tr class="empty-row"><td colspan="4">No data yet.</td></tr>')+'</tbody>'+
     '<tfoot><tr><td>Total</td><td class="num">'+fmtNPR(tb.totalDr)+'</td><td>Total</td><td class="num">'+fmtNPR(tb.totalCr)+'</td></tr></tfoot></table></div>';
 }
 function exportTrialBalanceCSV(){
-  const tb=calcTrialBalance();
-  const rows=[['Debit Account','Debit Amount ('+baseCurrency()+')','Credit Account','Credit Amount ('+baseCurrency()+')']];
+  const range = currentAcctPeriodRange();
+  const tb=calcTrialBalance(range.to);
+  const rows=[['Trial Balance — As of '+range.to],['Debit Account','Debit Amount ('+baseCurrency()+')','Credit Account','Credit Amount ('+baseCurrency()+')']];
   const n=Math.max(tb.dr.length,tb.cr.length);
   for(let i=0;i<n;i++){ rows.push([tb.dr[i]?tb.dr[i].label:'', tb.dr[i]?tb.dr[i].amount.toFixed(2):'', tb.cr[i]?tb.cr[i].label:'', tb.cr[i]?tb.cr[i].amount.toFixed(2):'']); }
   rows.push(['TOTAL', tb.totalDr.toFixed(2), 'TOTAL', tb.totalCr.toFixed(2)]);
   downloadCSV(rows,'trial-balance.csv');
 }
-function plHtml(){
-  const pl=calcProfitLoss();
+function plHtml(range){
+  range = range || currentAcctPeriodRange();
+  const pl=calcProfitLoss(range.from, range.to);
   const incRows=Object.keys(pl.incomeByCategory).map(function(k){ return '<div class="ledger-row"><span class="name">'+escapeHtml(k)+'</span><span class="amt">'+fmtNPR(pl.incomeByCategory[k])+'</span></div>'; }).join('');
   const expRows=Object.keys(pl.expenseByCategory).map(function(k){ return '<div class="ledger-row"><span class="name">'+escapeHtml(k)+'</span><span class="amt">'+fmtNPR(pl.expenseByCategory[k])+'</span></div>'; }).join('');
   const incVsExp = svgDonutChart([{label:'Income', value:pl.totalRevenue},{label:'Expense', value:pl.totalExpense}], {palette:['var(--green)','var(--red)'], emptyMsg:'Record a sale or expense to see this'});
-  return printHeaderHtml('Profit &amp; Loss Statement')+'<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportPLCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="downloadReportPDF(\'pl\')">'+icon('download')+' Download PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
+  return printHeaderHtml('Profit &amp; Loss Statement', 'For '+fmtDate(range.from)+' – '+fmtDate(range.to))+'<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportPLCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="downloadReportPDF(\'pl\')">'+icon('download')+' Download PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
     '<div class="grid-2">'+
       '<div class="card">'+
         '<div class="ledger-section-title">Revenue</div>'+
@@ -3222,8 +3312,9 @@ function plHtml(){
     '</div>';
 }
 function exportPLCSV(){
-  const pl=calcProfitLoss();
-  const rows=[['Section','Item','Amount ('+baseCurrency()+')']];
+  const range = currentAcctPeriodRange();
+  const pl=calcProfitLoss(range.from, range.to);
+  const rows=[['Profit & Loss — For '+range.from+' to '+range.to],['Section','Item','Amount ('+baseCurrency()+')']];
   rows.push(['Revenue','Sales Revenue',pl.salesRevenue.toFixed(2)]);
   Object.keys(pl.incomeByCategory).forEach(function(k){ rows.push(['Revenue',k,pl.incomeByCategory[k].toFixed(2)]); });
   rows.push(['Revenue','TOTAL REVENUE',pl.totalRevenue.toFixed(2)]);
@@ -3233,12 +3324,13 @@ function exportPLCSV(){
   rows.push(['','NET PROFIT/LOSS',pl.netProfit.toFixed(2)]);
   downloadCSV(rows,'profit-and-loss.csv');
 }
-function balanceSheetHtml(){
-  const bs=calcBalanceSheet();
+function balanceSheetHtml(range){
+  range = range || currentAcctPeriodRange();
+  const bs=calcBalanceSheet(range.to);
   const assetRows = bs.accounts.filter(function(a){ return !a.archived || Math.abs(a.balanceNPR)>0.004; }).map(function(a){
     return '<div class="ledger-row"><span class="name">'+escapeHtml(a.name)+' ('+a.currency+')'+(a.archived?' <span class="text-dim">(archived)</span>':'')+'</span><span class="amt">'+fmtNPR(a.balanceNPR)+'</span></div>';
   }).join('');
-  return printHeaderHtml('Balance Sheet')+'<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportBalanceSheetCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="downloadReportPDF(\'bs\')">'+icon('download')+' Download PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
+  return printHeaderHtml('Balance Sheet', 'As of '+fmtDate(range.to))+'<div class="btn-group" style="margin-bottom:14px"><button class="btn" onclick="exportBalanceSheetCSV()">'+icon('download')+' Export CSV</button><button class="btn" onclick="downloadReportPDF(\'bs\')">'+icon('download')+' Download PDF</button><button class="btn" onclick="window.print()">Print</button></div>'+
     balanceCheckHtml(bs.balanced, bs.balanced?'Balanced — assets equal liabilities plus equity':'Not balanced — please review your entries')+
     '<div class="grid-2">'+
       '<div class="card"><div class="ledger-section-title">Assets</div>'+assetRows+
@@ -3374,12 +3466,12 @@ function removeLogo(){
   toast('Logo removed','success');
   renderSettings();
 }
-function printHeaderHtml(reportTitle){
+function printHeaderHtml(reportTitle, period){
   const name = escapeHtml(state.meta.businessName || 'My Business');
   const logo = state.meta.logoDataUrl ? '<img class="print-logo" src="'+state.meta.logoDataUrl+'" alt="Logo">' : '';
   return '<div class="print-header">'+logo+
     '<div><div class="print-company">'+name+'</div>'+
-    '<div class="print-report-title">'+escapeHtml(reportTitle)+'</div>'+
+    '<div class="print-report-title">'+escapeHtml(reportTitle)+(period?' — '+escapeHtml(period):'')+'</div>'+
     '<div class="print-date">Generated '+fmtDate(todayISO())+'</div></div></div>';
 }
 function openBaseCurrencyModal(){
