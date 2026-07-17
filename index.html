@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Khata — Accounting Ledger</title>
+<title>QwikGold Limited — Accounting Ledger</title>
 <style>
 /* ============================================================
    DESIGN TOKENS
@@ -365,7 +365,7 @@ tfoot td{padding:12px 14px; font-weight:700; background:var(--surface-2); border
 .filter-bar{display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:16px;}
 .filter-bar .field{min-width:150px;}
 
-.summary-strip{display:flex; gap:14px; flex-wrap:wrap; margin-bottom:16px;}
+.summary-strip{display:flex; gap:14px; flex-wrap:wrap; margin-bottom:16px; margin-top:16px;}
 .summary-chip{background:var(--surface-2); border:1px solid var(--border-soft); border-radius:var(--radius); padding:12px 16px; flex:1; min-width:150px;}
 .summary-chip .l{font-size:11px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.04em; font-weight:700;}
 .summary-chip .v{font-family:var(--mono); font-size:16px; font-weight:700; margin-top:4px;}
@@ -2997,6 +2997,7 @@ function renderPurchaseReport(){
   el.innerHTML =
     printHeaderHtml('Purchase Report')+
     chartCard('Top Suppliers', svgBarChart(topSuppliers(6), {color:'var(--blue)', emptyMsg:'Record a purchase to see this'}), 'By total purchase amount ('+baseCurrency()+')')+
+    '<div id="purchaseReportSummary"></div>'+
     '<div class="filter-bar">'+
       '<div class="field"><label>From</label><input type="date" id="prFrom"></div>'+
       '<div class="field"><label>To</label><input type="date" id="prTo"></div>'+
@@ -3007,7 +3008,7 @@ function renderPurchaseReport(){
       '<button class="btn" onclick="exportPurchaseCSV()">'+icon('download')+' Export CSV</button>'+
       '<button class="btn" onclick="downloadReportPDF(\'purchase\')">'+icon('download')+' Download PDF</button>'+
       '<button class="btn" onclick="window.print()">Print</button>'+
-    '</div><div id="purchaseReportBody"></div>';
+    '</div><div id="purchaseReportTable"></div>';
   renderPurchaseReportBody();
 }
 function renderPurchaseReportBody(){
@@ -3025,13 +3026,14 @@ function renderPurchaseReportBody(){
       '<td class="num">'+fmtNPR(p.amount)+'</td><td class="num">'+fmtNPR(Math.max(0,purchaseDue(p)))+'</td>'+
       '<td><span class="badge '+stMap[purchaseStatus(p)]+'">'+purchaseStatus(p)+'</span></td></tr>';
   }).join('');
-  document.getElementById('purchaseReportBody').innerHTML =
+  document.getElementById('purchaseReportSummary').innerHTML =
     '<div class="summary-strip">'+
       '<div class="summary-chip"><div class="l">Entries</div><div class="v">'+list.length+'</div></div>'+
       '<div class="summary-chip"><div class="l">Total Purchases</div><div class="v">'+fmtNPR(totalAmount)+'</div></div>'+
       '<div class="summary-chip"><div class="l">Total Due</div><div class="v text-red">'+fmtNPR(totalDue)+'</div></div>'+
       '<div class="summary-chip"><div class="l">Total Paid</div><div class="v text-green">'+fmtNPR(totalAmount-totalDue)+'</div></div>'+
-    '</div>'+
+    '</div>';
+  document.getElementById('purchaseReportTable').innerHTML =
     '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Supplier</th><th>Description</th><th>Account</th><th class="num">Amount</th><th class="num">Due</th><th>Status</th></tr></thead>'+
     '<tbody>'+(rows||'<tr class="empty-row"><td colspan="7">No purchases match this filter.</td></tr>')+'</tbody></table></div>';
 }
@@ -3052,6 +3054,7 @@ function renderMoneyFlowReport(){
   el.innerHTML=
     printHeaderHtml('Money Flow Report')+
     chartCard('Cash Flow', svgBarChart(monthlyCashFlow(6), {color:'var(--green)', color2:'var(--red)', label1:'In', label2:'Out', emptyMsg:'Record cash in/out to see this trend'}), 'Money in vs out, last 6 months')+
+    '<div id="moneyFlowSummary"></div>'+
     '<div class="filter-bar">'+
       '<div class="field"><label>From</label><input type="date" id="mfFrom"></div>'+
       '<div class="field"><label>To</label><input type="date" id="mfTo"></div>'+
@@ -3062,7 +3065,7 @@ function renderMoneyFlowReport(){
       '<button class="btn" onclick="exportMoneyFlowCSV()">'+icon('download')+' Export CSV</button>'+
       '<button class="btn" onclick="downloadReportPDF(\'moneyflow\')">'+icon('download')+' Download PDF</button>'+
       '<button class="btn" onclick="window.print()">Print</button>'+
-    '</div><div id="moneyFlowBody"></div>';
+    '</div><div id="moneyFlowTable"></div>';
   renderMoneyFlowBody();
 }
 function renderMoneyFlowBody(){
@@ -3078,12 +3081,13 @@ function renderMoneyFlowBody(){
       '<td>'+escapeHtml(e.label||'')+'</td><td>'+(acc?escapeHtml(acc.name):'—')+'</td>'+
       '<td class="num '+(e.direction==='in'?'text-green':'text-red')+'">'+(e.direction==='in'?'+':'-')+fmtNPR(e.amountNPR)+'</td></tr>';
   }).join('');
-  document.getElementById('moneyFlowBody').innerHTML=
+  document.getElementById('moneyFlowSummary').innerHTML=
     '<div class="summary-strip">'+
       '<div class="summary-chip"><div class="l">Money In</div><div class="v text-green">'+fmtNPR(totalIn)+'</div></div>'+
       '<div class="summary-chip"><div class="l">Money Out</div><div class="v text-red">'+fmtNPR(totalOut)+'</div></div>'+
       '<div class="summary-chip"><div class="l">Net Flow</div><div class="v '+(totalIn-totalOut>=0?'text-green':'text-red')+'">'+fmtNPR(totalIn-totalOut)+'</div></div>'+
-    '</div>'+
+    '</div>';
+  document.getElementById('moneyFlowTable').innerHTML=
     '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Direction</th><th>Description</th><th>Account</th><th class="num">Amount</th></tr></thead>'+
     '<tbody>'+(rows||'<tr class="empty-row"><td colspan="5">No transactions match this filter.</td></tr>')+'</tbody></table></div>';
 }
